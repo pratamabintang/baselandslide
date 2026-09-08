@@ -1,5 +1,6 @@
 import os
 import sys
+import glob
 import time
 import argparse
 import logging
@@ -16,29 +17,76 @@ from data.datasets import create_dataloader, resolve_inputs, get_channel_count
 from utils.loss import BCEDiceLoss
 from utils.metrics import SegmentationMetrics
 from utils.plots import plot_results, plot_predictions
-from utils.torch_utils import select_device, init_seeds, model_info, EarlyStopping
+from utils.torch_utils import select_device, init_seeds, model_info, EarlyStopping, load_pretrained_weights
 from utils.general import increment_path, colorstr, check_file, set_logging
 from test import evaluate
 
 logger = set_logging(__name__)
 
 
+def get_latest_run_checkpoint(project='runs/train'):
+    """Search for the most recently modified last.pt in the runs directory."""
+    last_pts = sorted(glob.glob(f"{project}/**/weights/last.pt", recursive=True), key=os.path.getmtime)
+    if last_pts:
+        return last_pts[-1]
+    return None
+
+
 def train(hyp, opt, device):
     t0 = time.time()
+    resume = bool(opt.resume)
+    start_epoch = 1
+    best_dice = 0.0
+    best_iou = 0.0
 
-    # Directories
-    save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok, mkdir=True)
-    weights_dir = save_dir / 'weights'
-    weights_dir.mkdir(parents=True, exist_ok=True)
-    last_pt = weights_dir / 'last.pt'
-    best_pt = weights_dir / 'best.pt'
-    results_csv = save_dir / 'results.csv'
+    # -------------------------------------------------------------------------
+    # Handle Resume Setup
+    # -------------------------------------------------------------------------
+    if resume:
+        resume_path = opt.resume if isinstance(opt.resume, str) and opt.resume != 'get_last' else get_latest_run_checkpoint(opt.project)
+        if not resume_path or not Path(resume_path).exists():
+            raise FileNotFoundError(f"Cannot resume training: checkpoint not found at '{resume_path}'")
 
-    # Save run arguments and hyperparameters
-    with open(save_dir / 'opt.yaml', 'w') as f:
-        yaml.safe_dump(vars(opt), f, sort_keys=False)
-    with open(save_dir / 'hyp.yaml', 'w') as f:
-        yaml.safe_dump(hyp, f, sort_keys=False)
+        ckpt = torch.load(resume_path, map_location=device)
+        save_dir = Path(resume_path).parent.parent
+        weights_dir = save_dir / 'weights'
+        last_pt = weights_dir / 'last.pt'
+        best_pt = weights_dir / 'best.pt'
+        results_csv = save_dir / 'results.csv'
+
+        # Load original options and hyperparameters if available
+        opt_yaml = save_dir / 'opt.yaml'
+        if opt_yaml.exists():
+            with open(opt_yaml, 'r') as f:
+                saved_opt = yaml.safe_load(f)
+                opt.cfg = saved_opt.get('cfg', opt.cfg)
+                opt.data = saved_opt.get('data', opt.data)
+                opt.inputs = saved_opt.get('inputs', opt.inputs)
+                opt.img_size = saved_opt.get('img_size', opt.img_size)
+
+        start_epoch = ckpt.get('epoch', 0) + 1
+        best_dice = ckpt.get('best_dice', ckpt.get('val_dice', 0.0))
+        best_iou = ckpt.get('best_iou', ckpt.get('val_iou', 0.0))
+
+        print(colorstr('bold', 'yellow', f"\n[RESUME] Resuming training from {resume_path}"))
+        print(f"  Resuming Epoch     : {start_epoch}/{opt.epochs}")
+        print(f"  Previous Best Dice : {best_dice * 100:.2f}%, Best mIoU: {best_iou * 100:.2f}%")
+        print(f"  Run Directory      : {save_dir}\n")
+
+    else:
+        # New training run directories
+        save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok, mkdir=True)
+        weights_dir = save_dir / 'weights'
+        weights_dir.mkdir(parents=True, exist_ok=True)
+        last_pt = weights_dir / 'last.pt'
+        best_pt = weights_dir / 'best.pt'
+        results_csv = save_dir / 'results.csv'
+
+        # Save run arguments and hyperparameters
+        with open(save_dir / 'opt.yaml', 'w') as f:
+            yaml.safe_dump(vars(opt), f, sort_keys=False)
+        with open(save_dir / 'hyp.yaml', 'w') as f:
+            yaml.safe_dump(hyp, f, sort_keys=False)
 
     # Initialize seeds
     init_seeds(opt.seed)
@@ -54,17 +102,18 @@ def train(hyp, opt, device):
     in_channels = get_channel_count(inputs, presets)
     nc = data_dict.get('nc', 1)
 
-    print("\n" + "=" * 75)
-    print(colorstr('bold', 'cyan', '[START] STARTING LANDSLIDE SEGMENTATION TRAINING'))
-    print("=" * 75)
-    print(f"  Configuration File : {opt.cfg}")
-    print(f"  Input Modalities   : {inputs} (Total Channels: {in_channels})")
-    print(f"  Target Classes     : {nc} ({data_dict.get('names', ['landslide'])})")
-    print(f"  Image Resolution   : {opt.img_size}x{opt.img_size}")
-    print(f"  Batch Size         : {opt.batch_size}")
-    print(f"  Total Epochs       : {opt.epochs}")
-    print(f"  Save Directory     : {save_dir}")
-    print("-" * 75)
+    if not resume:
+        print("\n" + "=" * 75)
+        print(colorstr('bold', 'cyan', '[START] STARTING LANDSLIDE SEGMENTATION TRAINING'))
+        print("=" * 75)
+        print(f"  Configuration File : {opt.cfg}")
+        print(f"  Input Modalities   : {inputs} (Total Channels: {in_channels})")
+        print(f"  Target Classes     : {nc} ({data_dict.get('names', ['landslide'])})")
+        print(f"  Image Resolution   : {opt.img_size}x{opt.img_size}")
+        print(f"  Batch Size         : {opt.batch_size}")
+        print(f"  Total Epochs       : {opt.epochs}")
+        print(f"  Save Directory     : {save_dir}")
+        print("-" * 75)
 
     # Step 1: Dataloaders
     print(colorstr('bold', '[1/5] Loading datasets...'))
@@ -97,16 +146,14 @@ def train(hyp, opt, device):
     print(colorstr('bold', '[2/5] Building model architecture...'))
     model = Model(cfg=opt.cfg, ch=in_channels, nc=nc).to(device)
 
-    # Load pretrained weights if provided
-    if opt.weights and Path(opt.weights).exists():
+    # Load weights (either from resume checkpoint or pretrained weights)
+    if resume:
+        model.load_state_dict(ckpt['model'])
+        print(f"      -> Restored full model weights from checkpoint")
+    elif opt.weights:
         print(f"      -> Loading pretrained weights from {opt.weights}...")
-        ckpt = torch.load(opt.weights, map_location=device)
-        state_dict = ckpt['model'] if 'model' in ckpt else ckpt
-        model_dict = model.state_dict()
-        pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.shape == model_dict[k].shape}
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
-        print(f"      -> Successfully transferred {len(pretrained_dict)}/{len(model_dict)} layers")
+        res = load_pretrained_weights(model, opt.weights, device=device)
+        print(f"      -> Transferred {res['matched']}/{res['total']} matching layers from {res['source']} for fine-tuning")
 
     # Step 3: Criterion
     print(colorstr('bold', '[3/5] Setting up loss function and optimizer...'))
@@ -128,7 +175,15 @@ def train(hyp, opt, device):
         T_max=opt.epochs,
         eta_min=hyp.get('lr0', 1e-3) * hyp.get('lrf', 0.01)
     )
-    print(f"      -> Optimizer: AdamW (lr0={hyp.get('lr0', 1e-3)}, weight_decay={hyp.get('weight_decay', 1e-4)})")
+
+    if resume and 'optimizer' in ckpt and ckpt['optimizer'] is not None:
+        optimizer.load_state_dict(ckpt['optimizer'])
+        # Fast-forward scheduler to the current epoch
+        for _ in range(start_epoch - 1):
+            scheduler.step()
+        print(f"      -> Restored optimizer state and learning rate: {optimizer.param_groups[0]['lr']:.2e}")
+    else:
+        print(f"      -> Optimizer: AdamW (lr0={hyp.get('lr0', 1e-3)}, weight_decay={hyp.get('weight_decay', 1e-4)})")
 
     # Step 4: Mixed Precision
     print(colorstr('bold', '[4/5] Initializing compute hardware...'))
@@ -139,12 +194,10 @@ def train(hyp, opt, device):
     # Early stopping helper
     early_stopping = EarlyStopping(patience=opt.patience, verbose=False, mode='max')
 
-    # Logging headers
-    with open(results_csv, 'w') as f:
-        f.write('epoch,train_loss,val_loss,val_iou,val_dice,val_precision,val_recall,val_accuracy\n')
-
-    best_dice = 0.0
-    best_iou = 0.0
+    # Logging headers (create new or continue appending if resuming)
+    if not resume or not results_csv.exists():
+        with open(results_csv, 'w') as f:
+            f.write('epoch,train_loss,val_loss,val_iou,val_dice,val_precision,val_recall,val_accuracy\n')
 
     # Step 5: Training Loop
     print("\n" + colorstr('bold', '[5/5] Commencing training loop...\n'))
@@ -152,7 +205,7 @@ def train(hyp, opt, device):
     print(header_str)
     print("-" * len(header_str))
 
-    for epoch in range(1, opt.epochs + 1):
+    for epoch in range(start_epoch, opt.epochs + 1):
         epoch_t0 = time.time()
         model.train()
         train_loss = 0.0
@@ -271,6 +324,8 @@ def train(hyp, opt, device):
             'optimizer': optimizer.state_dict(),
             'val_dice': val_dice,
             'val_iou': val_iou,
+            'best_dice': best_dice,
+            'best_iou': best_iou,
             'cfg': opt.cfg,
             'inputs': inputs,
             'in_channels': in_channels,
@@ -302,7 +357,9 @@ def train(hyp, opt, device):
 
 def parse_opt():
     parser = argparse.ArgumentParser(description="Train Landslide Segmentation Model")
-    parser.add_argument('--weights', type=str, default='', help='initial weights path')
+    parser.add_argument('--weights', type=str, default='', help='initial pretrained weights path (e.g. weights.pt)')
+    parser.add_argument('--resume', nargs='?', const='get_last', default=False,
+                        help='resume most recent training run or specify path to last.pt (e.g. --resume or --resume runs/train/exp/weights/last.pt)')
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters yaml path')

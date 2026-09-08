@@ -166,13 +166,35 @@ Train lightweight U-Net with Topography only:
 python train.py --cfg models/architectures/unet_lite.yaml --inputs topo_only --epochs 50 --batch-size 8 --device 0
 ```
 
-### 4. Evaluation
+### 4. Transfer Learning & Official Pretrained Weights
+Initialize training from official U-Net pretrained weights (`milesial/Pytorch-UNet` Carvana weights) with automatic download and layer remapping:
+```bash
+python train.py --cfg models/architectures/unet.yaml --inputs rgb_only --weights unet_carvana --epochs 50 --batch-size 8
+```
+
+Supported pretrained aliases and sources:
+- `--weights unet_carvana` / `unet_carvana_scale0.5`: Official PyTorch U-Net (scale 0.5 Carvana weights)
+- `--weights unet_carvana_scale1.0`: Official PyTorch U-Net (scale 1.0 Carvana weights)
+- `--weights https://...`: Direct checkpoint download URL
+- `--weights runs/train/exp/weights/best.pt`: Local checkpoint from a previous experiment
+
+### 5. Resuming Interrupted Training
+Resume an interrupted run seamlessly (restores model, optimizer, scheduler, and epoch counter):
+```bash
+# Automatically resume the most recent run in runs/train/
+python train.py --resume
+
+# Or specify an explicit checkpoint path:
+python train.py --resume runs/train/exp/weights/last.pt
+```
+
+### 6. Evaluation
 Evaluate checkpoint on the validation set:
 ```bash
 python test.py --weights runs/train/exp/weights/best.pt --data data/landslide.yaml --split val --conf-thres 0.5
 ```
 
-### 5. Inference & Visual Overlays
+### 7. Inference & Visual Overlays
 Generate segmentation masks and visual comparison heatmaps:
 ```bash
 python predict.py --weights runs/train/exp/weights/best.pt --source dataset/dataset_1/validation --conf-thres 0.5
@@ -181,3 +203,4 @@ python predict.py --weights runs/train/exp/weights/best.pt --source dataset/data
 Outputs:
 - Binary PNG masks saved to `runs/predict/exp/masks/`
 - 3-panel visual overlay figures saved to `runs/predict/exp/overlays/`
+

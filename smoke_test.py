@@ -22,7 +22,7 @@ def run_smoke_test():
     print(colorstr('bold', 'cyan', "[SMOKE TEST] RUNNING COMPREHENSIVE REPOSITORY SMOKE TEST"))
     print("=" * 80)
     passed_tests = 0
-    total_tests = 6
+    total_tests = 7
     t0 = time.time()
 
     # -------------------------------------------------------------------------
@@ -209,6 +209,19 @@ def run_smoke_test():
     passed_tests += 1
     print(colorstr('bright_green', f"--> Test 6 Passed: Full inference & overlay generation verified!"))
 
+    # -------------------------------------------------------------------------
+    # TEST 7: Official UNet Weight Loader & Key Remapping
+    # -------------------------------------------------------------------------
+    print(f"\n[Test 7/{total_tests}] Testing Official UNet Weights Loader & Key Remapping...")
+    from utils.torch_utils import load_pretrained_weights
+    unet_model = Model(cfg='models/architectures/unet.yaml', ch=3, nc=1)
+    res = load_pretrained_weights(unet_model, 'unet_carvana', device='cpu')
+    assert res['matched'] > 100, f"Expected >100 matched layers, got {res['matched']}"
+    print(f"  [OK] Official UNet Carvana weights mapped: {res['matched']}/{res['total']} layers into declarative Model")
+
+    passed_tests += 1
+    print(colorstr('bright_green', f"--> Test 7 Passed: Official UNet pretrained weights loading & layer remapping verified!"))
+
     # Clean up test artifacts
     if smoke_save_dir.exists(): shutil.rmtree(smoke_save_dir)
     if predict_save_dir.exists(): shutil.rmtree(predict_save_dir)
@@ -221,6 +234,7 @@ def run_smoke_test():
     print(colorstr('bold', 'green', f"[PASSED] ALL {passed_tests}/{total_tests} SMOKE TESTS PASSED SUCCESSFULLY in {total_time:.2f}s!"))
     print("=" * 80 + "\n")
     return True
+
 
 
 if __name__ == '__main__':
