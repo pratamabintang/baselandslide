@@ -119,17 +119,25 @@ def load_pretrained_weights(model, weights_path, device='cpu'):
     # Remap official milesial/Pytorch-UNet keys to our declarative Model structure
     is_milesial = any(k.startswith(('inc.', 'down1.', 'up1.')) for k in state_dict.keys())
     if is_milesial:
+        # Determine whether model has a projection layer at layer 0 (Conv) or starts directly with DoubleConv
+        has_projection = False
+        if hasattr(model, 'model') and len(model.model) > 0:
+            first_layer_name = model.model[0].__class__.__name__
+            if first_layer_name == 'Conv':
+                has_projection = True
+
+        offset = 1 if has_projection else 0
         milesial_mapping = {
-            'inc.': 'model.1.',
-            'down1.': 'model.2.',
-            'down2.': 'model.3.',
-            'down3.': 'model.4.',
-            'down4.': 'model.5.',
-            'up1.': 'model.6.',
-            'up2.': 'model.7.',
-            'up3.': 'model.8.',
-            'up4.': 'model.9.',
-            'outc.': 'model.10.',
+            'inc.': f'model.{0 + offset}.',
+            'down1.': f'model.{1 + offset}.',
+            'down2.': f'model.{2 + offset}.',
+            'down3.': f'model.{3 + offset}.',
+            'down4.': f'model.{4 + offset}.',
+            'up1.': f'model.{5 + offset}.',
+            'up2.': f'model.{6 + offset}.',
+            'up3.': f'model.{7 + offset}.',
+            'up4.': f'model.{8 + offset}.',
+            'outc.': f'model.{9 + offset}.',
         }
         remapped_sd = {}
         for k, v in state_dict.items():

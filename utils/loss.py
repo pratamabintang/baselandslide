@@ -67,6 +67,10 @@ class CEDiceLoss(nn.Module):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
+        if weight is None and pos_weight is not None and float(pos_weight) != 1.0:
+            weight = torch.tensor([1.0, float(pos_weight)], dtype=torch.float32)
+        elif weight is not None and not isinstance(weight, torch.Tensor):
+            weight = torch.tensor(weight, dtype=torch.float32)
         self.ce = nn.CrossEntropyLoss(weight=weight)
         self.dice = DiceLoss(smooth=smooth)
 

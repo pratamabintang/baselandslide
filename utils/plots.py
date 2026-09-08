@@ -147,3 +147,110 @@ def plot_predictions(tensors, targets, preds_logits, save_path, conf_thres=0.5, 
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=200, bbox_inches='tight')
     plt.close()
+
+
+def plot_evolve(csv_path, save_dir=''):
+    """
+    Plot hyperparameter evolution progress and gene-fitness correlation scatter plots.
+
+    Args:
+        csv_path (str or Path): Path to evolve.csv
+        save_dir (str or Path): Output directory for plots
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        return
+
+    save_dir = Path(save_dir) if save_dir else csv_path.parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import csv
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        if not rows:
+            return
+
+        headers = list(rows[0].keys())
+        data_dict = {h: np.array([float(r[h]) for r in rows]) for h in headers}
+
+        generations = data_dict.get('generation', np.arange(len(rows)))
+        fitness = data_dict.get('fitness', np.zeros(len(rows)))
+        val_dice = data_dict.get('val_dice', np.zeros(len(rows)))
+        val_iou = data_dict.get('val_iou', np.zeros(len(rows)))
+        val_recall = data_dict.get('val_recall', np.zeros(len(rows)))
+
+        # ---------------------------------------------------------------------
+        # 1. Fitness & Metric Progress Plot
+        # ---------------------------------------------------------------------
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+        running_best_fit = np.maximum.accumulate(fitness)
+        axes[0].plot(generations, fitness, 'o-', color='royalblue', alpha=0.6, label='Generation Fitness')
+        axes[0].plot(generations, running_best_fit, 'r--', linewidth=2, label='Running Best Fitness')
+        best_gen_idx = int(np.argmax(fitness))
+        axes[0].scatter(generations[best_gen_idx], fitness[best_gen_idx], color='gold', marker='*', s=250, zorder=5,
+                        edgecolors='black', label=f'★ Best: {fitness[best_gen_idx]:.4f} (Gen {int(generations[best_gen_idx])})')
+        axes[0].set_title('Hyperparameter Evolution Progress', fontsize=13, fontweight='bold')
+        axes[0].set_ylabel('Composite Fitness Score', fontsize=11)
+        axes[0].grid(True, linestyle=':', alpha=0.6)
+        axes[0].legend(loc='best')
+
+        axes[1].plot(generations, val_dice * 100, color='m', marker='o', linestyle='-', alpha=0.7, label='Val Dice / F1 (%)')
+        axes[1].plot(generations, val_iou * 100, color='g', marker='s', linestyle='-', alpha=0.7, label='Val mIoU (%)')
+        axes[1].plot(generations, val_recall * 100, color='darkorange', marker='^', linestyle='--', alpha=0.7, label='Val Recall (%)')
+        axes[1].set_title('Validation Metrics Across Generations', fontsize=12, fontweight='bold')
+        axes[1].set_xlabel('Generation Index', fontsize=11)
+        axes[1].set_ylabel('Score (%)', fontsize=11)
+        axes[1].grid(True, linestyle=':', alpha=0.6)
+        axes[1].legend(loc='best')
+
+        plt.tight_layout()
+        plt.savefig(save_dir / 'evolve_fitness.png', dpi=200)
+        plt.close()
+
+        # ---------------------------------------------------------------------
+        # 2. Hyperparameter Gene Scatter Correlation Plot
+        # ---------------------------------------------------------------------
+        # Ignore non-hyperparameter columns
+        metric_cols = {'generation', 'fitness', 'val_dice', 'val_iou', 'val_recall', 'val_precision', 'val_loss', 'epoch'}
+        gene_cols = [c for c in headers if c not in metric_cols]
+
+        if gene_cols:
+            n_genes = len(gene_cols)
+            cols = 4
+            rows_grid = int(np.ceil(n_genes / cols))
+            fig, axes = plt.subplots(rows_grid, cols, figsize=(4 * cols, 3.2 * rows_grid))
+            axes = np.array(axes).reshape(-1)
+
+            log_scale_genes = {'lr0', 'lrf', 'weight_decay'}
+
+            for idx, gene in enumerate(gene_cols):
+                ax = axes[idx]
+                vals = data_dict[gene]
+                ax.scatter(vals, fitness, c=fitness, cmap='viridis', alpha=0.75, edgecolors='none', s=45)
+                # Highlight best
+                ax.scatter(vals[best_gen_idx], fitness[best_gen_idx], color='gold', marker='*', s=160,
+                           edgecolors='black', zorder=5)
+                ax.set_title(gene, fontsize=11, fontweight='bold')
+                ax.set_ylabel('Fitness', fontsize=9)
+                ax.grid(True, linestyle=':', alpha=0.5)
+
+                if gene in log_scale_genes and (vals > 0).all():
+                    ax.set_xscale('log')
+
+            # Hide unused axes
+            for idx in range(len(gene_cols), len(axes)):
+                axes[idx].axis('off')
+
+            plt.suptitle(f"Hyperparameter Gene Correlations (Best Gen {int(generations[best_gen_idx])}, Fit: {fitness[best_gen_idx]:.4f})",
+                         fontsize=14, fontweight='bold', y=1.01)
+            plt.tight_layout()
+            plt.savefig(save_dir / 'evolve_scatter.png', dpi=200, bbox_inches='tight')
+            plt.close()
+
+    except Exception as e:
+        print(f"[Warning] Failed to plot evolution graphs: {e}")
+

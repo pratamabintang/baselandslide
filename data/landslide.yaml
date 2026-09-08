@@ -11,15 +11,21 @@ names: ['background', 'landslide']
 
 # Active input modalities preset or list
 # Available modalities: IMAGE (3ch), DTM_NORM (1ch), SLOPE (1ch), ASPECT (2ch: sin/cos)
+# Fusion modes:
+#   - concat (default): Stacks modalities into C_in channels (e.g. RGB + DTM = 4 channels)
+#   - add: Element-wise addition into 3 RGB channels (e.g. normalized RGB + normalized DTM = 3 channels)
 default_input: rgb_only
 
 presets:
-  rgb_only: ['IMAGE']                                # 3 channels
+  rgb_only: ['IMAGE']                                # 3 channels (Pure RGB)
   topo_only: ['DTM_NORM', 'SLOPE', 'ASPECT']         # 4 channels (1 DTM + 1 SLOPE + 2 ASPECT)
-  rgb_dtm: ['IMAGE', 'DTM_NORM']                     # 4 channels (3 RGB + 1 DTM)
-  rgb_slope: ['IMAGE', 'SLOPE']                      # 4 channels (3 RGB + 1 SLOPE)
-  rgb_aspect: ['IMAGE', 'ASPECT']                    # 5 channels (3 RGB + 2 ASPECT)
-  all: ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']      # 7 channels (3 RGB + 1 DTM + 1 SLOPE + 2 ASPECT)
+  rgb_dtm: ['IMAGE', 'DTM_NORM']                     # 4 channels (concat) or 3 channels (add)
+  rgb_slope: ['IMAGE', 'SLOPE']                      # 4 channels (concat) or 3 channels (add)
+  rgb_aspect: ['IMAGE', 'ASPECT']                    # 5 channels (concat) or 3 channels (add)
+  all: ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']      # 7 channels (concat) or 3 channels (add)
+  rgb_add_dtm: ['IMAGE', 'DTM_NORM']                 # Preset for RGB + DTM addition fusion
+  rgb_add_slope: ['IMAGE', 'SLOPE']                  # Preset for RGB + SLOPE addition fusion
+  rgb_add_aspect: ['IMAGE', 'ASPECT']                # Preset for RGB + ASPECT addition fusion
 
 # Modality metadata and normalization parameters
 modality_info:

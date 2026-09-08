@@ -1,0 +1,27 @@
+# RGB + DTM Additive Fusion Training (Direct U-Net Without Projection Layer)
+# Element-wise addition: Normalized DTM (uint16/65535.0) added across all 3 normalized RGB channels (uint8/255.0)
+
+cfg: models/architectures/unet_noproj.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml
+inputs: rgb_dtm                   # IMAGE (3ch) + DTM_NORM (1ch)
+fusion: add                       # Element-wise addition fusion -> 3 channels output
+weights: ''                       # Pretrained weights path or alias (e.g. unet_carvana)
+resume: false
+
+epochs: 50
+batch_size: 12                    # Optimal for RTX 2060 Super (8GB VRAM)
+img_size: 512
+conf_thres: 0.5
+
+device: '0'
+workers: 2
+cache_ram: true                   # RAM caching for maximum GPU saturation
+accumulate: 1
+deterministic: false              # Enables cuDNN benchmark auto-tuner
+
+project: runs/train
+name: exp_rgb_add_dtm
+exist_ok: false
+patience: 15
+seed: 42

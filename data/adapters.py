@@ -38,8 +38,9 @@ class FolderStructureAdapter(BaseMultiModalDataset):
                  presets: Optional[Dict] = None,
                  modality_specs: Optional[Dict[str, Dict]] = None,
                  label_folder: str = 'LABEL',
-                 cache_ram: bool = False):
-        super().__init__(root_dir, split, inputs, img_size, augment, hyp, presets)
+                 cache_ram: bool = False,
+                 fusion: str = 'concat'):
+        super().__init__(root_dir, split, inputs, img_size, augment, hyp, presets, fusion=fusion)
 
         self.split_dir = self.root_dir / split if (self.root_dir / split).exists() else self.root_dir
         self.label_folder = label_folder
@@ -56,7 +57,11 @@ class FolderStructureAdapter(BaseMultiModalDataset):
                     self.specs[k] = v
 
         self._active_inputs = self._resolve_inputs(inputs, presets)
-        self._in_channels = sum(self.specs.get(mod, {'channels': 1})['channels'] for mod in self._active_inputs)
+        if self.fusion in ['add', 'addition', 'sum']:
+            # Addition fusion: auxiliary modalities added to 3-channel RGB
+            self._in_channels = 3 if ('IMAGE' in self._active_inputs or len(self._active_inputs) == 0) else self.specs.get(self._active_inputs[0], {'channels': 1})['channels']
+        else:
+            self._in_channels = sum(self.specs.get(mod, {'channels': 1})['channels'] for mod in self._active_inputs)
 
         # Index valid samples
         self._samples = self._find_valid_samples()
@@ -86,6 +91,12 @@ class FolderStructureAdapter(BaseMultiModalDataset):
             'rgb_slope': ['IMAGE', 'SLOPE'],
             'rgb_aspect': ['IMAGE', 'ASPECT'],
             'all': ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT'],
+            'rgb_add_dtm': ['IMAGE', 'DTM_NORM'],
+            'rgb_add_slope': ['IMAGE', 'SLOPE'],
+            'rgb_add_aspect': ['IMAGE', 'ASPECT'],
+            'rgb+dtm': ['IMAGE', 'DTM_NORM'],
+            'rgb+slope': ['IMAGE', 'SLOPE'],
+            'rgb+aspect': ['IMAGE', 'ASPECT'],
         }
         merged_presets = default_presets.copy()
         if presets:
@@ -94,7 +105,7 @@ class FolderStructureAdapter(BaseMultiModalDataset):
         if isinstance(inputs, str):
             if inputs in merged_presets:
                 return merged_presets[inputs]
-            split_inputs = [x.strip().upper() for x in inputs.replace(',', ' ').split() if x.strip()]
+            split_inputs = [x.strip().upper() for x in inputs.replace(',', ' ').replace('+', ' ').split() if x.strip()]
             return split_inputs if split_inputs else ['IMAGE']
 
         if isinstance(inputs, (list, tuple)):
@@ -211,9 +222,30 @@ class FolderStructureAdapter(BaseMultiModalDataset):
             multi_channel_tensor = multi_channel_tensor.copy()
             label_mask = label_mask.copy()
         else:
-            # Load and stack modalities
-            mod_arrays = [self.load_modality_array(mod, stem) for mod in self._active_inputs]
-            multi_channel_tensor = np.concatenate(mod_arrays, axis=-1)
+            if self.fusion in ['add', 'addition', 'sum']:
+                # Element-wise addition fusion (both RGB and auxiliary modalities normalized to [0, 1])
+                if 'IMAGE' in self._active_inputs:
+                    base_arr = self.load_modality_array('IMAGE', stem)  # Shape (H, W, 3) in [0, 1]
+                    aux_mods = [m for m in self._active_inputs if m != 'IMAGE']
+                else:
+                    base_arr = self.load_modality_array(self._active_inputs[0], stem)
+                    aux_mods = self._active_inputs[1:]
+
+                fused_arr = base_arr.copy()
+                for mod in aux_mods:
+                    aux_arr = self.load_modality_array(mod, stem)  # Normalized to [0, 1] (or [-1, 1] for aspect)
+                    # When base is (H, W, 3) and auxiliary is (H, W, 1), broadcasting adds aux to all 3 channels
+                    if fused_arr.ndim == 3 and fused_arr.shape[-1] == 3 and aux_arr.ndim == 3 and aux_arr.shape[-1] == 1:
+                        fused_arr = fused_arr + aux_arr
+                    else:
+                        fused_arr = fused_arr + aux_arr
+
+                multi_channel_tensor = fused_arr
+            else:
+                # Load and stack modalities (standard concatenation)
+                mod_arrays = [self.load_modality_array(mod, stem) for mod in self._active_inputs]
+                multi_channel_tensor = np.concatenate(mod_arrays, axis=-1)
+
             label_mask = self.load_label_mask(stem)
 
             if self.cache_ram:

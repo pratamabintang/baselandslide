@@ -22,7 +22,7 @@ from utils.general import increment_path, colorstr, check_file, set_logging, par
 logger = set_logging(__name__)
 
 
-def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL'):
+def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusion='concat'):
     """
     Load and preprocess multi-modal rasters for a single sample stem,
     and optionally load ground truth label mask if present.
@@ -32,6 +32,7 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL'):
         base_dir (Path): Base split or dataset directory
         inputs (list): List of active modality names (e.g. ['IMAGE', 'DTM_NORM'])
         label_folder (str): Name of ground truth mask folder
+        fusion (str): Modality fusion mode ('concat' or 'add')
 
     Returns:
         tensor (torch.Tensor): Model input tensor of shape (1, C_in, H, W)
@@ -101,7 +102,26 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL'):
                 arr = np.expand_dims(arr, axis=-1)
             mod_arrays.append(arr)
 
-    combined = np.concatenate(mod_arrays, axis=-1)  # (H, W, C_in)
+    if str(fusion).lower() in ['add', 'addition', 'sum']:
+        if 'IMAGE' in inputs:
+            rgb_idx = inputs.index('IMAGE')
+            fused = mod_arrays[rgb_idx].copy()
+            for i, mod in enumerate(inputs):
+                if i != rgb_idx:
+                    aux = mod_arrays[i]
+                    if fused.ndim == 3 and fused.shape[-1] == 3 and aux.ndim == 3 and aux.shape[-1] == 1:
+                        fused = fused + aux
+                    else:
+                        fused = fused + aux
+            combined = fused
+        else:
+            fused = mod_arrays[0].copy()
+            for aux in mod_arrays[1:]:
+                fused = fused + aux
+            combined = fused
+    else:
+        combined = np.concatenate(mod_arrays, axis=-1)  # (H, W, C_in)
+
     tensor = torch.from_numpy(combined.transpose(2, 0, 1)).float().unsqueeze(0)  # (1, C_in, H, W)
 
     # 2. Check and load Ground Truth Label Mask if available
@@ -311,21 +331,24 @@ def run_predict(opt):
         data_dict = yaml.safe_load(f)
 
     presets = data_dict.get('presets', {})
+    fusion = getattr(opt, 'fusion', 'concat')
 
     # Load model and weights
     if opt.weights and Path(opt.weights).exists():
         ckpt = torch.load(opt.weights, map_location=device)
         model_cfg = ckpt.get('cfg', opt.cfg)
+        fusion = ckpt.get('fusion', fusion)
         inputs = ckpt.get('inputs', resolve_inputs(opt.inputs, presets))
-        in_channels = ckpt.get('in_channels', get_channel_count(inputs, presets))
+        in_channels = ckpt.get('in_channels', get_channel_count(inputs, presets, fusion=fusion))
         nc = ckpt.get('nc', data_dict.get('nc', 1))
 
         model = Model(cfg=model_cfg, ch=in_channels, nc=nc).to(device)
         model.load_state_dict(ckpt['model'] if 'model' in ckpt else ckpt)
-        logger.info(f"Loaded model weights from {opt.weights}")
+        ep_info = f" (Epoch {ckpt['epoch']})" if isinstance(ckpt, dict) and 'epoch' in ckpt else ""
+        logger.info(f"Loaded model weights from {opt.weights}{ep_info}")
     else:
         inputs = resolve_inputs(opt.inputs, presets)
-        in_channels = get_channel_count(inputs, presets)
+        in_channels = get_channel_count(inputs, presets, fusion=fusion)
         nc = data_dict.get('nc', 1)
         model = Model(cfg=opt.cfg, ch=in_channels, nc=nc).to(device)
         logger.info(f"Initialized unweighted model from {opt.cfg}")
@@ -357,7 +380,7 @@ def run_predict(opt):
     print("=" * 80)
     print(f"  Source Path      : {opt.source}")
     print(f"  Total Samples    : {len(stems)}")
-    print(f"  Input Modalities : {inputs} (Channels: {in_channels})")
+    print(f"  Input Modalities : {inputs} (Channels: {in_channels}, Fusion: {fusion})")
     print(f"  Binary Threshold : {opt.conf_thres}")
     print(f"  Save Directory   : {save_dir}")
     print("-" * 80)
@@ -369,7 +392,7 @@ def run_predict(opt):
 
     for stem in pbar:
         try:
-            tensor, rgb_display, gt_mask = load_single_sample(stem, base_dir, inputs)
+            tensor, rgb_display, gt_mask = load_single_sample(stem, base_dir, inputs, fusion=fusion)
             tensor = tensor.to(device)
 
             # Forward pass
@@ -462,7 +485,9 @@ def parse_opt():
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
     parser.add_argument('--inputs', type=str, default='rgb_dtm',
-                        help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all)')
+                        help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all, rgb_add_dtm)')
+    parser.add_argument('--fusion', type=str, default='concat', choices=['concat', 'add'],
+                        help='modality fusion mode: concat (channel concatenation) or add (element-wise addition into RGB)')
     parser.add_argument('--conf-thres', type=float, default=0.5, help='confidence threshold for binary segmentation mask')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--project', default='runs/predict', help='save directory project')

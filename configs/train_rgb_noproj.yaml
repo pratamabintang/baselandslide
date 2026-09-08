@@ -1,0 +1,26 @@
+# Pure 3-Channel RGB Training (Direct U-Net Without Projection Layer)
+
+cfg: models/architectures/unet_noproj.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml
+inputs: rgb_only                  # Pure 3-channel RGB (IMAGE)
+fusion: concat                    # Not applicable for single modality, standard input
+weights: ''                       # Pretrained weights path or alias (e.g. unet_carvana)
+resume: false
+
+epochs: 50
+batch_size: 12                    # Optimal for RTX 2060 Super (8GB VRAM)
+img_size: 512
+conf_thres: 0.5
+
+device: '0'
+workers: 2
+cache_ram: true                   # RAM caching for maximum GPU saturation
+accumulate: 1
+deterministic: false              # Enables cuDNN benchmark auto-tuner
+
+project: runs/train
+name: exp_rgb_noproj
+exist_ok: false
+patience: 15
+seed: 42

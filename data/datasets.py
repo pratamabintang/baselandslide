@@ -25,6 +25,12 @@ def resolve_inputs(inputs, presets=None):
         'rgb_slope': ['IMAGE', 'SLOPE'],
         'rgb_aspect': ['IMAGE', 'ASPECT'],
         'all': ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT'],
+        'rgb_add_dtm': ['IMAGE', 'DTM_NORM'],
+        'rgb_add_slope': ['IMAGE', 'SLOPE'],
+        'rgb_add_aspect': ['IMAGE', 'ASPECT'],
+        'rgb+dtm': ['IMAGE', 'DTM_NORM'],
+        'rgb+slope': ['IMAGE', 'SLOPE'],
+        'rgb+aspect': ['IMAGE', 'ASPECT'],
     }
     merged_presets = default_presets.copy()
     if presets:
@@ -33,7 +39,7 @@ def resolve_inputs(inputs, presets=None):
     if isinstance(inputs, str):
         if inputs in merged_presets:
             return merged_presets[inputs]
-        split_inputs = [x.strip().upper() for x in inputs.replace(',', ' ').split() if x.strip()]
+        split_inputs = [x.strip().upper() for x in inputs.replace(',', ' ').replace('+', ' ').split() if x.strip()]
         return split_inputs if split_inputs else ['IMAGE']
 
     if isinstance(inputs, (list, tuple)):
@@ -48,10 +54,14 @@ def resolve_inputs(inputs, presets=None):
     return ['IMAGE']
 
 
-def get_channel_count(inputs, presets=None, modality_specs=None):
+def get_channel_count(inputs, presets=None, modality_specs=None, fusion='concat'):
     """
     Calculate total input channels for the resolved input modalities.
+    When fusion is 'add', auxiliary channels are added element-wise into the 3-channel RGB base (output = 3 channels).
     """
+    if str(fusion).lower() in ['add', 'addition', 'sum']:
+        return 3
+
     resolved = resolve_inputs(inputs, presets)
     specs = DEFAULT_MODALITY_SPECS.copy()
     if modality_specs:
@@ -77,7 +87,8 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
                   img_size: Union[int, Tuple[int, int]] = (512, 512),
                   augment: bool = False,
                   hyp: Optional[Dict] = None,
-                  cache_ram: bool = False) -> BaseMultiModalDataset:
+                  cache_ram: bool = False,
+                  fusion: str = 'concat') -> BaseMultiModalDataset:
     """
     Dataset Factory: Instantiates the appropriate registered dataset adapter based on YAML config.
 
@@ -89,6 +100,7 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
         augment: Whether to apply data augmentations
         hyp: Hyperparameters dictionary
         cache_ram: Whether to cache decoded arrays in RAM for maximum GPU saturation
+        fusion: Modality fusion mode ('concat' or 'add')
 
     Returns:
         BaseMultiModalDataset: Concrete dataset adapter instance conforming to standard interface
@@ -125,7 +137,8 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
         hyp=hyp,
         presets=presets,
         modality_specs=modality_specs,
-        cache_ram=cache_ram
+        cache_ram=cache_ram,
+        fusion=fusion
     )
 
     return dataset_instance
@@ -133,7 +146,7 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
 
 def create_dataloader(data_yaml_path, split='train', inputs='rgb_only', batch_size=8,
                       img_size=512, augment=False, hyp=None, shuffle=True, num_workers=0,
-                      pin_memory=True, cache_ram=False):
+                      pin_memory=True, cache_ram=False, fusion='concat'):
     """
     Construct DataLoader for any registered dataset adapter with multi-worker prefetching optimizations.
     """
@@ -144,7 +157,8 @@ def create_dataloader(data_yaml_path, split='train', inputs='rgb_only', batch_si
         img_size=img_size,
         augment=augment,
         hyp=hyp,
-        cache_ram=cache_ram
+        cache_ram=cache_ram,
+        fusion=fusion
     )
 
     loader_kwargs = {

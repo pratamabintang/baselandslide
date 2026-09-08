@@ -42,7 +42,8 @@ class BaseMultiModalDataset(Dataset, ABC):
                  inputs: Union[str, List[str]] = 'rgb_only',
                  img_size: Tuple[int, int] = (512, 512),
                  augment: bool = False, hyp: Optional[Dict] = None,
-                 presets: Optional[Dict] = None):
+                 presets: Optional[Dict] = None,
+                 fusion: str = 'concat'):
         super().__init__()
         self.root_dir = Path(root_dir)
         self.split = split
@@ -50,6 +51,7 @@ class BaseMultiModalDataset(Dataset, ABC):
         self.augment = augment
         self.hyp = hyp or {}
         self.presets = presets or {}
+        self.fusion = fusion.lower() if isinstance(fusion, str) else 'concat'
 
     @property
     @abstractmethod

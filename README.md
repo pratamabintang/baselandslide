@@ -91,29 +91,39 @@ $$\text{sample} = (\text{tensor}, \text{mask}, \text{sample\_id})$$
 
 ## 🧱 Architecture & Model Parser
 
-Neural architectures are declared in YAML (`models/architectures/unet.yaml`) using `[from, number, module, args]` blocks following the SSFusion paradigm. 
+Neural architectures are declared in YAML files using `[from, number, module, args]` blocks following the SSFusion paradigm. 
 
-The first layer (Layer 0) uses a standard $1\times1$ `Conv` block to project arbitrary concatenated multi-modal tensors ($C_{\text{in}} \in [1, 7]$) down to 3 channels before the U-Net encoder:
+The framework provides two primary architectural choices:
+1. **Direct U-Net Without Projection ([`models/architectures/unet_noproj.yaml`](file:///D:/landslide/models/architectures/unet_noproj.yaml))**:
+   Starts directly with Stage 1 `DoubleConv` (no $1\times1$ Conv projection layer). Designed for **pure 3-channel RGB** input or **element-wise additive fusion** (e.g. RGB + DTM addition):
+   ```yaml
+   backbone:
+     [[-1, 1, DoubleConv, [64]],        # 0 - Encoder Stage 1 (3 -> 64)
+      [-1, 1, Down, [128]],             # 1 - Encoder Stage 2 (64 -> 128)
+      [-1, 1, Down, [256]],             # 2 - Encoder Stage 3 (128 -> 256)
+      [-1, 1, Down, [512]],             # 3 - Encoder Stage 4 (256 -> 512)
+      [-1, 1, Down, [1024]],            # 4 - Bottleneck (512 -> 1024)
+     ]
+   ```
 
-```yaml
-# models/architectures/unet.yaml
-nc: 1
-backbone:
-  [[-1, 1, Conv, [3, 1, 1]],         # 0 - (C_in -> 3 via 1x1 Conv)
-   [-1, 1, DoubleConv, [64]],        # 1 - Encoder Stage 1 (3 -> 64)
-   [-1, 1, Down, [128]],             # 2 - Encoder Stage 2 (64 -> 128)
-   [-1, 1, Down, [256]],             # 3 - Encoder Stage 3 (128 -> 256)
-   [-1, 1, Down, [512]],             # 4 - Encoder Stage 4 (256 -> 512)
-   [-1, 1, Down, [1024]],            # 5 - Bottleneck (512 -> 1024)
-  ]
-head:
-  [[[5, 4], 1, Up, [512]],           # 6 - Decoder Stage 4 (Up 5 + Skip 4 -> 512)
-   [[6, 3], 1, Up, [256]],           # 7 - Decoder Stage 3 (Up 6 + Skip 3 -> 256)
-   [[7, 2], 1, Up, [128]],           # 8 - Decoder Stage 2 (Up 7 + Skip 2 -> 128)
-   [[8, 1], 1, Up, [64]],            # 9 - Decoder Stage 1 (Up 8 + Skip 1 -> 64)
-   [-1, 1, OutConv, [1]],            # 10 - Output Logits (64 -> nc)
-  ]
-```
+2. **Standard U-Net with Input Projection ([`models/architectures/unet.yaml`](file:///D:/landslide/models/architectures/unet.yaml))**:
+   Uses a $1\times1$ `Conv` projection block (Layer 0) to project arbitrary concatenated multi-modal tensors ($C_{\text{in}} \in [1, 7]$) down to 3 channels prior to the encoder:
+   ```yaml
+   backbone:
+     [[-1, 1, Conv, [3, 1, 1]],         # 0 - (C_in -> 3 via 1x1 Conv)
+      [-1, 1, DoubleConv, [64]],        # 1 - Encoder Stage 1 (3 -> 64)
+      ...
+     ]
+   ```
+
+---
+
+## 🔀 Multi-Modal Fusion Modes
+
+The framework supports two distinct fusion mechanisms selectable via `--fusion`:
+- **Concatenation (`--fusion concat`)**: Modalities are stacked along the channel axis (e.g., RGB (3ch) + DTM (1ch) = 4 input channels).
+- **Element-wise Addition (`--fusion add`)**: Normalized auxiliary topographic rasters (e.g., normalized DTM $\in [0, 1]$) are added directly into all 3 normalized optical RGB channels ($x_{\text{RGB}} \in [0, 1]$), resulting in an exact **3-channel input tensor**:
+  $$x_{\text{fused}} = x_{\text{RGB}} + x_{\text{DTM\_NORM}}$$
 
 ---
 
@@ -150,7 +160,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Verify Setup with Smoke Test
-Run the automated 6-stage test suite to verify datasets, models, loss functions, training, and inference:
+Run the automated test suite to verify datasets, models, loss functions, training, and inference:
 ```bash
 python smoke_test.py
 ```
@@ -160,20 +170,26 @@ python smoke_test.py
 You can launch training using a pre-configured YAML file (`--config`), eliminating the need to type arguments repeatedly:
 
 ```bash
-# Standard High-Throughput Training (RGB + DTM)
+# 1. Pure 3-Channel RGB Training (Direct U-Net Without Projection)
+python train.py --config configs/train_rgb_noproj.yaml
+
+# 2. RGB + DTM Additive Fusion Training (Direct U-Net Without Projection)
+python train.py --config configs/train_rgb_add_dtm.yaml
+
+# 3. Standard High-Throughput Concatenation Training (RGB + DTM, 4 Channels)
 python train.py --config configs/train.yaml
 
-# Full 7-Channel Multi-Modal Training
+# 4. Full 7-Channel Multi-Modal Training
 python train.py --config configs/train_multimodal.yaml
 
-# Fine-Tuning from Official Carvana U-Net Weights
+# 5. Fine-Tuning from Official Carvana U-Net Weights
 python train.py --config configs/train_finetune_carvana.yaml
 ```
 
 > [!TIP]
 > You can override any configuration parameter on the fly:
 > ```bash
-> python train.py --config configs/train.yaml --epochs 100 --batch-size 16 --name custom_run
+> python train.py --config configs/train_rgb_add_dtm.yaml --epochs 100 --batch-size 16 --name custom_run
 > ```
 > See [`CONFIGS.md`](file:///D:/landslide/CONFIGS.md) for full configuration details.
 

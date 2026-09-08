@@ -64,11 +64,25 @@ class SegmentationMetrics:
         Returns:
             dict of float: iou, dice, precision, recall, accuracy
         """
-        iou = (self.tp + self.smooth) / (self.tp + self.fp + self.fn + self.smooth)
-        dice = (2.0 * self.tp + self.smooth) / (2.0 * self.tp + self.fp + self.fn + self.smooth)
-        precision = (self.tp + self.smooth) / (self.tp + self.fp + self.smooth)
-        recall = (self.tp + self.smooth) / (self.tp + self.fn + self.smooth)
-        accuracy = (self.tp + self.tn + self.smooth) / (self.tp + self.tn + self.fp + self.fn + self.smooth)
+        if self.tp + self.fp == 0:
+            precision = 0.0
+        else:
+            precision = self.tp / (self.tp + self.fp)
+
+        if self.tp + self.fn == 0:
+            recall = 1.0 if (self.tp + self.fp == 0) else 0.0
+        else:
+            recall = self.tp / (self.tp + self.fn)
+
+        if self.tp + self.fp + self.fn == 0:
+            iou = 1.0
+            dice = 1.0
+        else:
+            iou = self.tp / (self.tp + self.fp + self.fn)
+            dice = (2.0 * self.tp) / (2.0 * self.tp + self.fp + self.fn)
+
+        total_pixels = self.tp + self.tn + self.fp + self.fn
+        accuracy = (self.tp + self.tn) / total_pixels if total_pixels > 0 else 0.0
 
         return {
             'iou': float(iou),

@@ -94,17 +94,20 @@ def run_test(opt):
         data_dict = yaml.safe_load(f)
 
     # Resolve inputs and in_channels
-    inputs = resolve_inputs(opt.inputs, data_dict.get('presets', {}))
-    in_channels = get_channel_count(inputs, data_dict.get('presets', {}))
-
-    # Initialize model
+    fusion = getattr(opt, 'fusion', 'concat')
     if opt.weights and Path(opt.weights).exists():
         ckpt = torch.load(opt.weights, map_location=device)
         model_cfg = ckpt.get('cfg', opt.cfg)
-        model = Model(cfg=model_cfg, ch=in_channels, nc=data_dict.get('nc', 1)).to(device)
+        fusion = ckpt.get('fusion', fusion)
+        inputs = ckpt.get('inputs', resolve_inputs(opt.inputs, data_dict.get('presets', {})))
+        in_channels = ckpt.get('in_channels', get_channel_count(inputs, data_dict.get('presets', {}), fusion=fusion))
+        model = Model(cfg=model_cfg, ch=in_channels, nc=ckpt.get('nc', data_dict.get('nc', 1))).to(device)
         model.load_state_dict(ckpt['model'])
-        logger.info(f"Loaded weights from {opt.weights}")
+        ep_info = f" (Epoch {ckpt['epoch']})" if isinstance(ckpt, dict) and 'epoch' in ckpt else ""
+        logger.info(f"Loaded weights from {opt.weights}{ep_info}")
     else:
+        inputs = resolve_inputs(opt.inputs, data_dict.get('presets', {}))
+        in_channels = get_channel_count(inputs, data_dict.get('presets', {}), fusion=fusion)
         logger.info(f"Initializing model from config: {opt.cfg} (no pretrained weights)")
         model = Model(cfg=opt.cfg, ch=in_channels, nc=data_dict.get('nc', 1)).to(device)
 
@@ -120,10 +123,11 @@ def run_test(opt):
         img_size=opt.img_size,
         augment=False,
         shuffle=False,
-        num_workers=opt.workers
+        num_workers=opt.workers,
+        fusion=fusion
     )
 
-    logger.info(f"Evaluating {len(dataset)} samples across modalities: {inputs} (channels={in_channels})")
+    logger.info(f"Evaluating {len(dataset)} samples across modalities: {inputs} (channels={in_channels}, fusion={fusion})")
 
     # Run evaluation
     scores = evaluate(
@@ -160,6 +164,8 @@ def parse_opt():
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
     parser.add_argument('--inputs', type=str, default='rgb_only',
                         help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all) or list')
+    parser.add_argument('--fusion', type=str, default='concat', choices=['concat', 'add'],
+                        help='modality fusion mode: concat (channel concatenation) or add (element-wise addition into RGB)')
     parser.add_argument('--split', type=str, default='val', help='dataset split to evaluate (val, train)')
     parser.add_argument('--batch-size', type=int, default=8, help='batch size')
     parser.add_argument('--img-size', type=int, default=512, help='inference image size')

@@ -1,0 +1,35 @@
+# ==============================================================================
+# Genetic Hyperparameter Evolution Configuration (RTX 2060 Super 8GB)
+# ==============================================================================
+# Usage:
+#   python evolve.py --config configs/evolve.yaml
+#   python evolve.py --config configs/evolve.yaml --generations 50 --epochs 10
+# ==============================================================================
+
+# Evolution Search Budget
+generations: 30                    # Total candidate generations to evolve
+epochs: 15                         # Fast screening budget per candidate (10-15 recommended)
+mutation_prob: 0.8                 # Probability of mutating each individual hyperparameter gene
+
+# Model & Data Configuration
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml         # Initial baseline seed hyperparameters
+inputs: rgb_dtm                    # Presets: rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all
+weights: unet_carvana              # Pretrained backbone initialization
+fusion: concat                     # concat or add
+
+# Hardware & Throughput
+batch_size: 8
+img_size: 512
+device: '0'                        # '0' for CUDA GPU, 'cpu' for CPU
+workers: 2                         # 2 workers recommended on Windows
+cache_ram: false                   # Disabled for instant zero-RAM startup
+accumulate: 1
+deterministic: false
+
+# Checkpointing & Project Output
+project: runs/evolve
+name: exp_evolve
+exist_ok: false
+resume: false

@@ -1,17 +1,17 @@
 # Hyperparameters for landslide segmentation training from scratch
 
 lr0: 0.001            # initial learning rate (e.g. AdamW 1e-3)
-lrf: 0.01             # final OneCycleLR learning rate factor (lr0 * lrf)
+lrf: 0.1              # final OneCycleLR / CosineAnnealing learning rate factor (lr0 * lrf)
 momentum: 0.937       # SGD momentum/Adam beta1
 weight_decay: 0.0005  # optimizer weight decay
 warmup_epochs: 3.0    # warmup epochs (fractions ok)
 warmup_momentum: 0.8  # warmup initial momentum
 warmup_bias_lr: 0.1   # warmup initial bias lr
 
-# Loss weights (Combined BCE + Dice)
-bce_weight: 1.0       # BCE loss weight alpha
-dice_weight: 1.0      # Dice loss weight beta
-pos_weight: 1.0       # Positive class weight multiplier for BCEWithLogitsLoss
+# Loss weights (Combined CE + Dice)
+bce_weight: 0.5       # CrossEntropy loss weight alpha
+dice_weight: 1.0      # Foreground-only Dice loss weight beta
+pos_weight: 4.0       # Positive class (landslide) weight multiplier for CrossEntropyLoss
 
 # Data augmentation probabilities and ranges
 fliplr: 0.5           # probability of horizontal flip

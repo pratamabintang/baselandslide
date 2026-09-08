@@ -64,6 +64,7 @@ def train(hyp, opt, device):
                 opt.cfg = saved_opt.get('cfg', opt.cfg)
                 opt.data = saved_opt.get('data', opt.data)
                 opt.inputs = saved_opt.get('inputs', opt.inputs)
+                opt.fusion = saved_opt.get('fusion', getattr(opt, 'fusion', 'concat'))
                 opt.img_size = saved_opt.get('img_size', opt.img_size)
 
         start_epoch = ckpt.get('epoch', 0) + 1
@@ -103,7 +104,7 @@ def train(hyp, opt, device):
     # Resolve active input modalities and total input channels
     presets = data_dict.get('presets', {})
     inputs = resolve_inputs(opt.inputs, presets)
-    in_channels = get_channel_count(inputs, presets)
+    in_channels = get_channel_count(inputs, presets, fusion=opt.fusion)
     nc = data_dict.get('nc', 1)
 
     if not resume:
@@ -111,7 +112,7 @@ def train(hyp, opt, device):
         print(colorstr('bold', 'cyan', '[START] STARTING LANDSLIDE SEGMENTATION TRAINING'))
         print("=" * 75)
         print(f"  Configuration File : {opt.cfg}")
-        print(f"  Input Modalities   : {inputs} (Total Channels: {in_channels})")
+        print(f"  Input Modalities   : {inputs} (Total Channels: {in_channels}, Fusion: {opt.fusion})")
         print(f"  Target Classes     : {nc} ({data_dict.get('names', ['landslide'])})")
         print(f"  Image Resolution   : {opt.img_size}x{opt.img_size}")
         print(f"  Batch Size         : {opt.batch_size}")
@@ -132,7 +133,8 @@ def train(hyp, opt, device):
         hyp=hyp,
         shuffle=True,
         num_workers=opt.workers,
-        cache_ram=opt.cache_ram
+        cache_ram=opt.cache_ram,
+        fusion=opt.fusion
     )
 
     val_loader, val_dataset = create_dataloader(
@@ -144,7 +146,8 @@ def train(hyp, opt, device):
         augment=False,
         shuffle=False,
         num_workers=opt.workers,
-        cache_ram=opt.cache_ram
+        cache_ram=opt.cache_ram,
+        fusion=opt.fusion
     )
     print(f"      -> Train Samples: {len(train_dataset)} ({len(train_loader)} batches/epoch)")
     print(f"      -> Val Samples  : {len(val_dataset)} ({len(val_loader)} batches/epoch)")
@@ -340,6 +343,7 @@ def train(hyp, opt, device):
                 'best_iou': best_iou,
                 'cfg': opt.cfg,
                 'inputs': inputs,
+                'fusion': opt.fusion,
                 'in_channels': in_channels,
                 'nc': nc
             }, best_pt)
@@ -359,6 +363,7 @@ def train(hyp, opt, device):
             'best_iou': best_iou,
             'cfg': opt.cfg,
             'inputs': inputs,
+            'fusion': opt.fusion,
             'in_channels': in_channels,
             'nc': nc
         }, last_pt)
@@ -416,6 +421,8 @@ def train(hyp, opt, device):
     # Plot metrics
     plot_results(results_csv, save_dir=save_dir)
 
+    return best_dice, best_iou, best_scores
+
 
 def parse_opt():
     parser = argparse.ArgumentParser(description="Train Landslide Segmentation Model")
@@ -427,7 +434,9 @@ def parse_opt():
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters yaml path')
     parser.add_argument('--inputs', type=str, default='rgb_only',
-                        help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all) or explicit list')
+                        help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all, rgb_add_dtm) or explicit list')
+    parser.add_argument('--fusion', type=str, default='concat', choices=['concat', 'add'],
+                        help='modality fusion mode: concat (channel concatenation) or add (element-wise addition into RGB)')
     parser.add_argument('--epochs', type=int, default=50, help='number of epochs')
     parser.add_argument('--batch-size', type=int, default=8, help='batch size')
     parser.add_argument('--img-size', type=int, default=512, help='image resolution')

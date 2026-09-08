@@ -1,0 +1,26 @@
+# Lightweight Direct U-Net Architecture (No Input Projection Layer)
+# Designed for Fast Training/Inference on Pure 3-Channel RGB or Additive Multi-modal Inputs
+
+nc: 2  # Number of segmentation classes (2 for background + landslide mask)
+depth_multiple: 1.0
+width_multiple: 1.0
+
+# Backbone (Encoder & Bottleneck)
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, DoubleConv, [32]],        # 0 - Encoder Stage 1 (in_channels -> 32)
+   [-1, 1, Down, [64]],              # 1 - Encoder Stage 2 (32 -> 64, stride 2)
+   [-1, 1, Down, [128]],             # 2 - Encoder Stage 3 (64 -> 128, stride 4)
+   [-1, 1, Down, [256]],             # 3 - Encoder Stage 4 (128 -> 256, stride 8)
+   [-1, 1, Down, [512]],             # 4 - Bottleneck (256 -> 512, stride 16)
+  ]
+
+# Head (Decoder & Output Layer)
+head:
+  # [from, number, module, args]
+  [[[4, 3], 1, Up, [256]],           # 5 - Decoder Stage 4 (up 4 + skip 3 -> 256)
+   [[5, 2], 1, Up, [128]],           # 6 - Decoder Stage 3 (up 5 + skip 2 -> 128)
+   [[6, 1], 1, Up, [64]],            # 7 - Decoder Stage 2 (up 6 + skip 1 -> 64)
+   [[7, 0], 1, Up, [32]],            # 8 - Decoder Stage 1 (up 7 + skip 0 -> 32)
+   [-1, 1, OutConv, [2]],            # 9 - Output 1x1 Conv (32 -> nc)
+  ]
