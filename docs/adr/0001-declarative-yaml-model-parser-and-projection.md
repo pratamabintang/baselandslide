@@ -1,2 +1,0 @@
-# Declarative YAML Model Parser and Multi-Modal Input Projection
-To enable reproducible ablation of multi-modal raster combinations without modifying Python network definitions, neural architectures are specified declaratively in YAML using `[from, number, module, args]` blocks following SSFusion conventions. A standard $1\times1$ `Conv` layer at index 0 maps arbitrary active multi-modal channels ($C_{\text{in}} \in [1, 7]$) down to 3 channels prior to the U-Net encoder.

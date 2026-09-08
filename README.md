@@ -8,17 +8,19 @@ A modular, declarative PyTorch repository for multi-modal landslide segmentation
 
 ```text
 landslide/
-├── dataset/
+├── dataset/                     # Local datasets (gitignored)
 │   └── dataset_1/               # Primary multi-modal landslide dataset
-│       ├── train/               # Training rasters (IMAGE, LABEL, DTM_NORM, SLOPE, ASPECT)
-│       ├── validation/          # Validation rasters (IMAGE, LABEL, DTM_NORM, SLOPE, ASPECT)
+│       ├── train/               # (IMAGE, LABEL, DTM, DTM_NORM, SLOPE, ASPECT) [910 samples]
+│       ├── validation/          # (IMAGE, LABEL, DTM, DTM_NORM, SLOPE, ASPECT) [184 samples]
 │       ├── global_raster_minmax.json
 │       └── pairing_reports/
 ├── data/
 │   ├── landslide.yaml           # Dataset configuration, paths, classes, presets
 │   ├── hyp.scratch.yaml         # Training hyperparameters & loss weights
+│   ├── base.py                  # BaseMultiModalDataset abstract interface & registry
+│   ├── adapters.py              # FolderStructureAdapter & CustomDatasetWrapper
 │   ├── transforms.py            # Synchronized multi-modal spatial augmentations
-│   └── datasets.py              # Multi-modal dataset loader & NaN/normalization engine
+│   └── datasets.py              # Multi-modal dataset factory & loader
 ├── models/
 │   ├── architectures/
 │   │   ├── unet.yaml            # Standard U-Net architecture YAML
@@ -31,12 +33,13 @@ landslide/
 │   ├── plots.py                 # Loss curves and multi-panel prediction overlays
 │   ├── torch_utils.py           # Device management, seeding, and early stopping
 │   └── general.py               # Logging, path incrementation, and CLI styling
-├── train.py                     # Training loop with validation & best model checkpointing
+├── train.py                     # Training loop with live diagnostics & checkpointing
 ├── test.py                      # Standalone evaluation script on validation/test sets
 ├── predict.py                   # Multi-modal inference & visualization overlay generator
-├── requirements.txt             # Environment dependencies
-├── CONTEXT.md                   # Domain vocabulary and glossary
-└── docs/adr/                    # Architecture Decision Records
+├── smoke_test.py                # Automated 6-stage repository verification suite
+├── environment.yml              # Conda environment definition for RTX 2060 Super (CUDA 12.1)
+├── requirements.txt             # Pip environment dependencies
+└── CONTEXT.md                   # Domain vocabulary and glossary
 ```
 
 ---
@@ -54,29 +57,46 @@ The framework supports dynamic concatenation of optical RGB imagery and continuo
 | `rgb_aspect` | `['IMAGE', 'ASPECT']` | 5 | RGB + Aspect orientation ($\sin\theta, \cos\theta$) |
 | `all` | `['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']` | 7 | Full multi-modal feature set |
 
-You can also pass arbitrary custom combinations via `--inputs`, e.g., `--inputs IMAGE DTM_NORM SLOPE`.
+Custom channel combinations can be passed directly via `--inputs`, e.g., `--inputs IMAGE DTM_NORM SLOPE`.
 
 ---
 
 ## ⚙️ Data Preprocessing & Normalization
 
-1. **NaN Handling**: NaN pixels at raster boundaries are replaced immediately upon loading via `np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)`.
-2. **Optical RGB (`IMAGE`)**: Scaled to $[0, 1]$ via $x / 255.0$.
-3. **Normalized DTM (`DTM_NORM`)**: 16-bit unsigned integer scaled to $[0, 1]$ via $x / 65535.0$.
-4. **Slope (`SLOPE`)**: Degrees $[0, 90]^\circ$ scaled to $[0, 1]$ via $\text{slope} / 90.0$.
-5. **Aspect (`ASPECT`)**: Degrees $[0, 360]^\circ$ decomposed into cyclic continuous components $\sin(\theta)$ and $\cos(\theta)$ in $[-1, 1]$ (2 channels).
+1. **NaN Handling**: Edge NaNs are replaced immediately upon loading via `np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)`.
+2. **Optical RGB (`IMAGE`)**: Scaled to $[0.0, 1.0]$ via $x / 255.0$.
+3. **Normalized DTM (`DTM_NORM`)**: 16-bit unsigned integer scaled to $[0.0, 1.0]$ via $x / 65535.0$.
+4. **Slope (`SLOPE`)**: Degrees $[0, 90]^\circ$ scaled to $[0.0, 1.0]$ via $\text{slope} / 90.0$.
+5. **Aspect (`ASPECT`)**: Degrees $[0, 360]^\circ$ decomposed into continuous components $\sin(\theta)$ and $\cos(\theta)$ in $[-1.0, 1.0]$ (2 channels).
 6. **Ground Truth (`LABEL`)**: Binary mask mapped to $\{0.0, 1.0\}$.
+
+---
+
+## 🔌 Integrating New External Datasets
+
+Any new dataset can be integrated by adhering to the `BaseMultiModalDataset` interface (`data/base.py`):
+
+### 1. Expected Interface Contract
+Every sample returned by `__getitem__(idx)` must be a 3-element tuple:
+$$\text{sample} = (\text{tensor}, \text{mask}, \text{sample\_id})$$
+- `tensor`: `torch.FloatTensor` of shape `(C_in, H, W)` with normalized feature values.
+- `mask`: `torch.FloatTensor` of shape `(1, H, W)` with binary ground truth $\{0.0, 1.0\}$.
+- `sample_id`: `str` unique identifier.
+
+### 2. Integration Methods
+- **Zero-Code Folder Datasets**: Create a dataset YAML referencing your new folder (e.g. `data/my_dataset.yaml` with `dataset_type: folder`).
+- **Custom PyTorch Classes**: Register custom classes with `@register_dataset("my_custom_name")` in `data/adapters.py`.
 
 ---
 
 ## 🧱 Architecture & Model Parser
 
-Neural architectures are declared in YAML (`models/unet.yaml`) using `[from, number, module, args]` blocks following the SSFusion paradigm. 
+Neural architectures are declared in YAML (`models/architectures/unet.yaml`) using `[from, number, module, args]` blocks following the SSFusion paradigm. 
 
 The first layer (Layer 0) uses a standard $1\times1$ `Conv` block to project arbitrary concatenated multi-modal tensors ($C_{\text{in}} \in [1, 7]$) down to 3 channels before the U-Net encoder:
 
 ```yaml
-# models/unet.yaml
+# models/architectures/unet.yaml
 nc: 1
 backbone:
   [[-1, 1, Conv, [3, 1, 1]],         # 0 - (C_in -> 3 via 1x1 Conv)
@@ -97,7 +117,7 @@ head:
 
 ---
 
-## 📉 Loss Function
+## 📉 Loss Function & Evaluation Metrics
 
 The training objective combines pixel-level classification (Binary Cross Entropy with Logits) and region-level boundary overlap (Soft Dice Loss):
 
@@ -105,37 +125,59 @@ $$\mathcal{L} = \alpha \cdot \mathcal{L}_{\text{BCEWithLogits}} + \beta \cdot \m
 
 Loss weights $\alpha, \beta$ are configurable in `data/hyp.scratch.yaml`.
 
+Evaluation tracks:
+- **Mean IoU (Jaccard Index)**
+- **Dice Coefficient (F1-Score)**
+- **Precision & Recall**
+- **Pixel Accuracy**
+
 ---
 
-## 🚀 Quickstart
+## 🚀 Quickstart Guide
 
-### 1. Installation
+### 1. Conda Environment Setup (RTX 2060 Super)
+
+Create and activate the optimized Conda environment (Python 3.10, PyTorch 2.3+, CUDA 12.1):
+
+```bash
+conda env create -f environment.yml
+conda activate landslide
+```
+
+Alternatively, install via pip:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Training
-Train a model with RGB + DTM inputs:
+### 2. Verify Setup with Smoke Test
+Run the automated 6-stage test suite to verify datasets, models, loss functions, training, and inference:
+```bash
+python smoke_test.py
+```
+
+### 3. Model Training
+Train standard U-Net with RGB + DTM inputs:
 ```bash
 python train.py --cfg models/architectures/unet.yaml --inputs rgb_dtm --epochs 50 --batch-size 8 --device 0
 ```
 
-Train with Topography only on a lighter architecture:
+Train lightweight U-Net with Topography only:
 ```bash
 python train.py --cfg models/architectures/unet_lite.yaml --inputs topo_only --epochs 50 --batch-size 8 --device 0
 ```
 
-### 3. Evaluation
+### 4. Evaluation
 Evaluate checkpoint on the validation set:
 ```bash
 python test.py --weights runs/train/exp/weights/best.pt --data data/landslide.yaml --split val --conf-thres 0.5
 ```
 
-### 4. Inference & Visual Overlays
+### 5. Inference & Visual Overlays
 Generate segmentation masks and visual comparison heatmaps:
 ```bash
 python predict.py --weights runs/train/exp/weights/best.pt --source dataset/dataset_1/validation --conf-thres 0.5
 ```
+
 Outputs:
 - Binary PNG masks saved to `runs/predict/exp/masks/`
 - 3-panel visual overlay figures saved to `runs/predict/exp/overlays/`

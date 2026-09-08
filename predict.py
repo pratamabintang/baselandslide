@@ -1,4 +1,5 @@
 import os
+import time
 import argparse
 import glob
 from pathlib import Path
@@ -6,6 +7,7 @@ import yaml
 from PIL import Image
 import numpy as np
 import torch
+from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -146,9 +148,19 @@ def run_predict(opt):
         logger.warning(f"No samples found at {opt.source}")
         return
 
-    logger.info(f"Running inference on {len(stems)} samples...")
+    print("\n" + "=" * 70)
+    print(colorstr('bold', 'cyan', f"[PREDICT] Running inference on {len(stems)} samples..."))
+    print(f"  Source Directory : {opt.source}")
+    print(f"  Modalities       : {inputs}")
+    print(f"  Binary Threshold : {opt.conf_thres}")
+    print(f"  Output Directory : {save_dir}")
+    print("=" * 70)
 
-    for stem in stems:
+    pbar = tqdm(stems, desc="Processing Samples", unit="img", bar_format="{l_bar}{bar:25}{r_bar}")
+    t_infer_start = time.time()
+    processed_count = 0
+
+    for stem in pbar:
         try:
             tensor, rgb_display = load_single_sample(stem, base_dir, inputs)
             tensor = tensor.to(device)
@@ -165,24 +177,24 @@ def run_predict(opt):
             fig, ax = plt.subplots(1, 3, figsize=(15, 5))
             if rgb_display is not None:
                 ax[0].imshow(rgb_display)
-                ax[0].set_title("Input RGB")
+                ax[0].set_title(f"{stem} (RGB)")
             else:
                 ax[0].imshow(tensor[0, 0].cpu().numpy(), cmap='terrain')
-                ax[0].set_title("Input Topography")
+                ax[0].set_title(f"{stem} (Topography)")
             ax[0].axis('off')
 
             ax[1].imshow(probs, cmap='jet', vmin=0, vmax=1)
-            ax[1].set_title("Probability Heatmap")
+            ax[1].set_title(f"Probability Heatmap (max={probs.max():.2f})")
             ax[1].axis('off')
 
             if rgb_display is not None:
                 overlay = rgb_display.copy()
                 mask_bool = binary_mask > 0
-                overlay[mask_bool, 0] = np.clip(overlay[mask_bool, 0] * 0.5 + 0.5, 0, 1)  # Red highlight
+                overlay[mask_bool, 0] = np.clip(overlay[mask_bool, 0] * 0.5 + 0.5, 0, 1)
                 ax[2].imshow(overlay)
             else:
                 ax[2].imshow(binary_mask, cmap='gray')
-            ax[2].set_title(f"Prediction (thr={opt.conf_thres})")
+            ax[2].set_title(f"Binary Overlay (thr={opt.conf_thres})")
             ax[2].axis('off')
 
             plt.tight_layout()
@@ -190,8 +202,15 @@ def run_predict(opt):
             plt.savefig(overlay_out_path, dpi=150, bbox_inches='tight')
             plt.close()
 
+            processed_count += 1
+            elapsed = time.time() - t_infer_start
+            fps = processed_count / max(elapsed, 1e-4)
+            pbar.set_postfix({'speed': f"{fps:.1f} img/s", 'last': stem[:18]})
+
         except Exception as e:
             logger.error(f"Error processing sample {stem}: {e}")
+
+    total_infer_time = time.time() - t_infer_start
 
     print("\n" + "=" * 70)
     print(colorstr('bold', 'green', '[DONE] INFERENCE COMPLETE'))
