@@ -77,13 +77,13 @@ def load_pretrained_weights(model, weights_path, device='cpu'):
         dict: {'matched': int, 'total': int, 'source': str}
     """
     OFFICIAL_ALIASES = {
-        'unet_carvana': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
-        'unet_carvana_0.5': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
-        'unet_carvana_scale0.5': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
+        'unet_carvana': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale1.0_epoch2.pth',
         'unet_carvana_1.0': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale1.0_epoch2.pth',
         'unet_carvana_scale1.0': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale1.0_epoch2.pth',
-        'milesial/pytorch-unet': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
-        'official_unet': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
+        'unet_carvana_0.5': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
+        'unet_carvana_scale0.5': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale0.5_epoch2.pth',
+        'milesial/pytorch-unet': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale1.0_epoch2.pth',
+        'official_unet': 'https://github.com/milesial/Pytorch-UNet/releases/download/v3.0/unet_carvana_scale1.0_epoch2.pth',
     }
 
     weights_key = str(weights_path).strip().lower()

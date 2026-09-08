@@ -184,8 +184,8 @@ python train.py --cfg models/architectures/unet.yaml --inputs rgb_only --weights
 ```
 
 Supported pretrained aliases and sources:
-- `--weights unet_carvana` / `unet_carvana_scale0.5`: Official PyTorch U-Net (scale 0.5 Carvana weights)
-- `--weights unet_carvana_scale1.0`: Official PyTorch U-Net (scale 1.0 Carvana weights)
+- `--weights unet_carvana` / `unet_carvana_scale1.0`: Official PyTorch U-Net (scale 1.0 Carvana weights - default)
+- `--weights unet_carvana_scale0.5`: Official PyTorch U-Net (scale 0.5 Carvana weights)
 - `--weights https://...`: Direct checkpoint download URL
 - `--weights runs/train/exp/weights/best.pt`: Local checkpoint from a previous experiment
 
