@@ -63,10 +63,8 @@ def parse_model(d, ch):
         elif m is Up:
             # f is [lower_idx, skip_idx]
             c1_lower = ch[f[0]]
-            c1_skip = ch[f[1]]
-            c1_total = c1_lower + c1_skip
             c2 = args[0]
-            args = [c1_total, c2, *args[1:]]
+            args = [c1_lower, c2, *args[1:]]
 
         elif m is OutConv:
             c1 = ch[f]

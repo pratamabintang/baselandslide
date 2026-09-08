@@ -166,7 +166,10 @@ def run_predict(opt):
             tensor = tensor.to(device)
 
             logits = model(tensor)
-            probs = torch.sigmoid(logits)[0, 0].cpu().numpy()  # (H, W)
+            if logits.shape[1] == 1:
+                probs = torch.sigmoid(logits)[0, 0].cpu().numpy()  # (H, W)
+            else:
+                probs = torch.softmax(logits, dim=1)[0, 1].cpu().numpy()  # Channel 1 is landslide
             binary_mask = (probs > opt.conf_thres).astype(np.uint8) * 255
 
             # Save binary PNG mask

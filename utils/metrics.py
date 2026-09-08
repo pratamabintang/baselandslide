@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 
@@ -33,8 +34,15 @@ class SegmentationMetrics:
             logits (torch.Tensor): predicted logits (B, 1, H, W)
             targets (torch.Tensor): ground truth binary masks (B, 1, H, W)
         """
-        probs = torch.sigmoid(logits)
-        preds = (probs > self.conf_thres).float()
+        if logits.shape[1] == 1:
+            probs = torch.sigmoid(logits)
+            preds = (probs > self.conf_thres).float()
+        else:
+            probs = F.softmax(logits, dim=1)
+            preds = (probs[:, 1:2, ...] > self.conf_thres).float()
+
+        if targets.dim() == 3:
+            targets = targets.unsqueeze(1)
         targets = (targets > 0.5).float()
 
         # Compute batch elements

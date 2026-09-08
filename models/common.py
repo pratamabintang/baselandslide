@@ -61,14 +61,14 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then DoubleConv with skip-connection concatenation."""
 
-    def __init__(self, c1, c2, bilinear=True):
+    def __init__(self, c1, c2, bilinear=False):
         super().__init__()
         self.bilinear = bilinear
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(c1, c2)
+            self.conv = DoubleConv(c1, c2, c1 // 2)
         else:
-            self.up = nn.ConvTranspose2d(c1 // 2, c1 // 2, kernel_size=2, stride=2)
+            self.up = nn.ConvTranspose2d(c1, c1 // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(c1, c2)
 
     def forward(self, x1, x2=None):

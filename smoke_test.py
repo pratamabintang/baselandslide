@@ -89,10 +89,10 @@ def run_smoke_test():
     print(f"\n[Test 3/{total_tests}] Testing Model Parser & Forward Pass across Architectures...")
     for cfg in ['models/architectures/unet.yaml', 'models/architectures/unet_lite.yaml']:
         for ch in [3, 4, 5, 7]:
-            model = Model(cfg=cfg, ch=ch, nc=1)
+            model = Model(cfg=cfg, ch=ch, nc=2)
             dummy_input = torch.randn(2, ch, 128, 128)
             out = model(dummy_input)
-            assert out.shape == (2, 1, 128, 128), f"Output shape mismatch for {cfg}: {out.shape}"
+            assert out.shape == (2, 2, 128, 128), f"Output shape mismatch for {cfg}: {out.shape}"
         print(f"  [OK] Model '{cfg}': verified forward pass for C_in in [3, 4, 5, 7]")
 
     passed_tests += 1
@@ -105,7 +105,7 @@ def run_smoke_test():
     criterion = BCEDiceLoss(alpha=1.0, beta=1.0)
     metrics = SegmentationMetrics(conf_thres=0.5)
 
-    dummy_logits = torch.randn(4, 1, 64, 64)
+    dummy_logits = torch.randn(4, 2, 64, 64)
     dummy_targets = torch.randint(0, 2, (4, 1, 64, 64)).float()
 
     total_loss, loss_dict = criterion(dummy_logits, dummy_targets)
@@ -153,7 +153,7 @@ def run_smoke_test():
 
     # Run micro-epoch
     loader, _ = create_dataloader('data/landslide.yaml', split='val', inputs='rgb_dtm', batch_size=2, num_workers=0)
-    model = Model(cfg=SmokeOpt.cfg, ch=4, nc=1).to(device)
+    model = Model(cfg=SmokeOpt.cfg, ch=4, nc=2).to(device)
     opt_engine = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
     model.train()
@@ -214,9 +214,9 @@ def run_smoke_test():
     # -------------------------------------------------------------------------
     print(f"\n[Test 7/{total_tests}] Testing Official UNet Weights Loader & Key Remapping...")
     from utils.torch_utils import load_pretrained_weights
-    unet_model = Model(cfg='models/architectures/unet.yaml', ch=3, nc=1)
+    unet_model = Model(cfg='models/architectures/unet.yaml', ch=3, nc=2)
     res = load_pretrained_weights(unet_model, 'unet_carvana', device='cpu')
-    assert res['matched'] > 100, f"Expected >100 matched layers, got {res['matched']}"
+    assert res['matched'] >= 118, f"Expected >=118 matched layers, got {res['matched']}"
     print(f"  [OK] Official UNet Carvana weights mapped: {res['matched']}/{res['total']} layers into declarative Model")
 
     passed_tests += 1
@@ -232,7 +232,7 @@ def run_smoke_test():
     test_opt = train_parse_opt()
     assert test_opt.batch_size == 16, f"Expected overridden batch_size=16, got {test_opt.batch_size}"
     assert test_opt.inputs == 'all', f"Expected overridden inputs=all, got {test_opt.inputs}"
-    assert test_opt.cache_ram == True, f"Expected config default cache_ram=True, got {test_opt.cache_ram}"
+    assert test_opt.cache_ram == False, f"Expected config default cache_ram=False, got {test_opt.cache_ram}"
     print(f"  [OK] Config file defaults loaded and overridden properly: batch_size={test_opt.batch_size}, inputs={test_opt.inputs}")
 
     passed_tests += 1

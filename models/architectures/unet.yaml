@@ -1,6 +1,6 @@
 # U-Net Architecture Configuration for Landslide Segmentation
 
-nc: 1  # Number of segmentation classes (1 for binary landslide mask)
+nc: 2  # Number of segmentation classes (2 for background + landslide mask)
 depth_multiple: 1.0
 width_multiple: 1.0
 
@@ -23,5 +23,5 @@ head:
    [[6, 3], 1, Up, [256]],           # 7 - Decoder Stage 3 (up 6 + skip 3 -> 256)
    [[7, 2], 1, Up, [128]],           # 8 - Decoder Stage 2 (up 7 + skip 2 -> 128)
    [[8, 1], 1, Up, [64]],            # 9 - Decoder Stage 1 (up 8 + skip 1 -> 64)
-   [-1, 1, OutConv, [1]],            # 10 - Output 1x1 Conv (64 -> nc)
+   [-1, 1, OutConv, [2]],            # 10 - Output 1x1 Conv (64 -> nc=2)
   ]

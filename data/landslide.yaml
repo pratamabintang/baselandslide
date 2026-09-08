@@ -6,8 +6,8 @@ train: train
 val: validation
 
 # Classes
-nc: 1
-names: ['landslide']
+nc: 2
+names: ['background', 'landslide']
 
 # Active input modalities preset or list
 # Available modalities: IMAGE (3ch), DTM_NORM (1ch), SLOPE (1ch), ASPECT (2ch: sin/cos)

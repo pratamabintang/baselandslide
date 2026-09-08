@@ -83,7 +83,10 @@ def plot_predictions(tensors, targets, preds_logits, save_path, conf_thres=0.5, 
         save_path (str or Path): output image destination
     """
     n = min(tensors.size(0), max_samples)
-    probs = torch.sigmoid(preds_logits)
+    if preds_logits.shape[1] == 1:
+        probs = torch.sigmoid(preds_logits)
+    else:
+        probs = torch.softmax(preds_logits, dim=1)[:, 1:2, ...]
     binary_preds = (probs > conf_thres).float()
 
     fig, axes = plt.subplots(n, 4, figsize=(16, 4 * n))
