@@ -1,0 +1,102 @@
+# ==============================================================================
+# AI Agents, LLM Assist & Customization Configs (Keep repo clean)
+# ==============================================================================
+.agents/
+.agent/
+_agents/
+_agent/
+.gemini/
+.antigravity/
+.claude/
+.claude-plugin/
+.cursor/
+.cursorrules
+.copilot/
+.github/copilot*
+.openai/
+.aider*
+.continue/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+CONTEXT.md
+skills.json
+plugins.json
+
+# ==============================================================================
+# Python & Bytecode
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==============================================================================
+# Virtual Environments
+# ==============================================================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ==============================================================================
+# Jupyter Notebooks & IDEs
+# ==============================================================================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==============================================================================
+# Deep Learning Artifacts, Model Checkpoints & Logs
+# ==============================================================================
+runs/
+checkpoints/
+weights/
+*.pth
+*.pt
+*.onnx
+*.engine
+*.tflite
+wandb/
+tensorboard/
+*.log
+
+# ==============================================================================
+# OS & System Files
+# ==============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================================================================
+# Large Datasets & Pairing Reports
+# ==============================================================================
+dataset/
+pairing_reports/
+*.tif
+*.tiff

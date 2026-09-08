@@ -1,0 +1,21 @@
+name: landslide
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=2.3.1
+  - torchvision=0.18.1
+  - torchaudio=2.3.1
+  - pytorch-cuda=12.1
+  - numpy>=1.22.0
+  - pillow>=9.0.0
+  - pyyaml>=6.0
+  - matplotlib>=3.5.0
+  - tqdm>=4.64.0
+  - scipy>=1.8.0
+  - pip
+  - pip:
+      - opencv-python>=4.5.0

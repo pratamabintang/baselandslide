@@ -1,0 +1,54 @@
+# Landslide Multi-Modal Dataset Configuration
+
+# Dataset directory paths (relative to repo root or absolute)
+path: dataset/dataset_1
+train: train
+val: validation
+
+# Classes
+nc: 1
+names: ['landslide']
+
+# Active input modalities preset or list
+# Available modalities: IMAGE (3ch), DTM_NORM (1ch), SLOPE (1ch), ASPECT (2ch: sin/cos)
+default_input: rgb_only
+
+presets:
+  rgb_only: ['IMAGE']                                # 3 channels
+  topo_only: ['DTM_NORM', 'SLOPE', 'ASPECT']         # 4 channels (1 DTM + 1 SLOPE + 2 ASPECT)
+  rgb_dtm: ['IMAGE', 'DTM_NORM']                     # 4 channels (3 RGB + 1 DTM)
+  rgb_slope: ['IMAGE', 'SLOPE']                      # 4 channels (3 RGB + 1 SLOPE)
+  rgb_aspect: ['IMAGE', 'ASPECT']                    # 5 channels (3 RGB + 2 ASPECT)
+  all: ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']      # 7 channels (3 RGB + 1 DTM + 1 SLOPE + 2 ASPECT)
+
+# Modality metadata and normalization parameters
+modality_info:
+  IMAGE:
+    folder: IMAGE
+    ext: .png
+    channels: 3
+    norm_type: scale
+    scale_factor: 255.0
+  DTM_NORM:
+    folder: DTM_NORM
+    ext: .tif
+    channels: 1
+    norm_type: scale
+    scale_factor: 65535.0
+  SLOPE:
+    folder: SLOPE
+    ext: .tif
+    channels: 1
+    norm_type: degrees_90
+    scale_factor: 90.0
+  ASPECT:
+    folder: ASPECT
+    ext: .tif
+    channels: 2
+    norm_type: sincos
+  LABEL:
+    folder: LABEL
+    ext: .png
+    channels: 1
+    norm_type: binary_mask
+    positive_val: 65535
