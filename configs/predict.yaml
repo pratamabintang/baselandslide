@@ -1,0 +1,19 @@
+# ==============================================================================
+# Model Inference & Visualization Overlay Configuration
+# ==============================================================================
+# Usage:
+#   python predict.py --config configs/predict.yaml
+#   python predict.py --config configs/predict.yaml --source dataset/dataset_1/validation/IMAGE/sample.png
+# ==============================================================================
+
+weights: runs/train/exp_rgb_dtm/weights/best.pt
+source: dataset/dataset_1/validation
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+inputs: rgb_dtm
+conf_thres: 0.5
+device: '0'
+
+project: runs/predict
+name: exp_pred
+exist_ok: false

@@ -1,0 +1,35 @@
+# ==============================================================================
+# Standard High-Throughput Training Configuration (Optimized for RTX 2060 Super)
+# ==============================================================================
+# Usage:
+#   python train.py --config configs/train.yaml
+#   python train.py --config configs/train.yaml --epochs 100 --batch-size 16
+# ==============================================================================
+
+# Model & Data Architecture
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml
+inputs: rgb_dtm                   # Presets: rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all
+weights: ''                       # Pretrained weights path or alias (e.g. unet_carvana)
+resume: false                     # Set true or path to resume (e.g. runs/train/exp/weights/last.pt)
+
+# Training Hyperparameters
+epochs: 50
+batch_size: 12                    # Optimal for 8GB VRAM (RTX 2060 Super)
+img_size: 512
+conf_thres: 0.5
+
+# Hardware & Throughput Optimization
+device: '0'                       # '0' for CUDA GPU, 'cpu' for CPU
+workers: 2                        # Multi-worker prefetching on Windows
+cache_ram: true                   # Cache decoded tensors in RAM for 0ms disk I/O
+accumulate: 1                     # Gradient accumulation steps (e.g. 2 for effective batch 24)
+deterministic: false              # Enables cuDNN benchmark kernel auto-tuning
+
+# Logging & Checkpointing
+project: runs/train
+name: exp_rgb_dtm
+exist_ok: false
+patience: 15
+seed: 42

@@ -1,0 +1,30 @@
+# ==============================================================================
+# Full 7-Channel Multi-Modal Training Configuration (RGB + DTM + Slope + Aspect)
+# ==============================================================================
+# Usage:
+#   python train.py --config configs/train_multimodal.yaml
+# ==============================================================================
+
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml
+inputs: all                       # Full 7 channels: IMAGE(3) + DTM_NORM(1) + SLOPE(1) + ASPECT(2)
+weights: ''
+resume: false
+
+epochs: 50
+batch_size: 12
+img_size: 512
+conf_thres: 0.5
+
+device: '0'
+workers: 2
+cache_ram: true
+accumulate: 1
+deterministic: false
+
+project: runs/train
+name: exp_multimodal_all
+exist_ok: false
+patience: 15
+seed: 42

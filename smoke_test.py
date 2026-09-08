@@ -22,7 +22,7 @@ def run_smoke_test():
     print(colorstr('bold', 'cyan', "[SMOKE TEST] RUNNING COMPREHENSIVE REPOSITORY SMOKE TEST"))
     print("=" * 80)
     passed_tests = 0
-    total_tests = 7
+    total_tests = 8
     t0 = time.time()
 
     # -------------------------------------------------------------------------
@@ -222,6 +222,22 @@ def run_smoke_test():
     passed_tests += 1
     print(colorstr('bright_green', f"--> Test 7 Passed: Official UNet pretrained weights loading & layer remapping verified!"))
 
+    # -------------------------------------------------------------------------
+    # TEST 8: YAML Configuration File Argument Parser & Overriding
+    # -------------------------------------------------------------------------
+    print(f"\n[Test 8/{total_tests}] Testing YAML Configuration Argument Parser & CLI Overrides...")
+    from train import parse_opt as train_parse_opt
+    import sys
+    sys.argv = ['train.py', '--config', 'configs/train.yaml', '--batch-size', '16', '--inputs', 'all']
+    test_opt = train_parse_opt()
+    assert test_opt.batch_size == 16, f"Expected overridden batch_size=16, got {test_opt.batch_size}"
+    assert test_opt.inputs == 'all', f"Expected overridden inputs=all, got {test_opt.inputs}"
+    assert test_opt.cache_ram == True, f"Expected config default cache_ram=True, got {test_opt.cache_ram}"
+    print(f"  [OK] Config file defaults loaded and overridden properly: batch_size={test_opt.batch_size}, inputs={test_opt.inputs}")
+
+    passed_tests += 1
+    print(colorstr('bright_green', f"--> Test 8 Passed: YAML config argument file loading & dynamic CLI overriding verified!"))
+
     # Clean up test artifacts
     if smoke_save_dir.exists(): shutil.rmtree(smoke_save_dir)
     if predict_save_dir.exists(): shutil.rmtree(predict_save_dir)
@@ -234,6 +250,7 @@ def run_smoke_test():
     print(colorstr('bold', 'green', f"[PASSED] ALL {passed_tests}/{total_tests} SMOKE TESTS PASSED SUCCESSFULLY in {total_time:.2f}s!"))
     print("=" * 80 + "\n")
     return True
+
 
 
 

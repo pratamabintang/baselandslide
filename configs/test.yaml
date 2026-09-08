@@ -1,0 +1,23 @@
+# ==============================================================================
+# Model Evaluation / Testing Configuration
+# ==============================================================================
+# Usage:
+#   python test.py --config configs/test.yaml
+#   python test.py --config configs/test.yaml --weights runs/train/exp/weights/best.pt
+# ==============================================================================
+
+weights: runs/train/exp_rgb_dtm/weights/best.pt
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+inputs: rgb_dtm
+split: val                        # 'val' or 'train'
+batch_size: 12
+img_size: 512
+conf_thres: 0.5
+device: '0'
+workers: 2
+plots: true
+
+project: runs/val
+name: exp_val
+exist_ok: false

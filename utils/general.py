@@ -55,3 +55,28 @@ def colorstr(*inputs):
         'bold': '\033[1m', 'underline': '\033[4m'
     }
     return ''.join(colors_dict[x] for x in colors) + f'{string}' + colors_dict['end']
+
+
+def parse_options_with_config(parser):
+    """
+    Parse CLI options while supporting pre-loading default values from a YAML configuration file.
+    CLI arguments explicitly specified by the user will override values defined in the YAML config.
+    """
+    import argparse
+    import yaml
+
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument('--config', type=str, default='', help='path to yaml config file')
+    config_args, _ = config_parser.parse_known_args()
+
+    if config_args.config:
+        config_path = check_file(config_args.config)
+        with open(config_path, 'r') as f:
+            yaml_defaults = yaml.safe_load(f) or {}
+
+        if yaml_defaults and isinstance(yaml_defaults, dict):
+            normalized_defaults = {k.replace('-', '_'): v for k, v in yaml_defaults.items()}
+            parser.set_defaults(**normalized_defaults)
+
+    return parser.parse_args()
+

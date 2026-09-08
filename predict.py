@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from models.model_parser import Model
 from data.datasets import resolve_inputs, get_channel_count, MODALITY_EXTENSIONS
 from utils.torch_utils import select_device
-from utils.general import increment_path, colorstr, check_file, set_logging
+from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 
 logger = set_logging(__name__)
 
@@ -223,6 +223,7 @@ def run_predict(opt):
 
 def parse_opt():
     parser = argparse.ArgumentParser(description="Run Landslide Segmentation Inference")
+    parser.add_argument('--config', type=str, default='', help='path to yaml configuration file (e.g. configs/predict.yaml)')
     parser.add_argument('--weights', type=str, default='', help='model weights (.pt)')
     parser.add_argument('--source', type=str, default='dataset/dataset_1/validation', help='input sample or folder')
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
@@ -234,7 +235,8 @@ def parse_opt():
     parser.add_argument('--project', default='runs/predict', help='save directory project')
     parser.add_argument('--name', default='exp', help='save directory experiment name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
-    return parser.parse_args()
+    return parse_options_with_config(parser)
+
 
 
 if __name__ == '__main__':

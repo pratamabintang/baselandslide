@@ -11,7 +11,7 @@ from utils.loss import BCEDiceLoss
 from utils.metrics import SegmentationMetrics
 from utils.plots import plot_predictions
 from utils.torch_utils import select_device
-from utils.general import increment_path, colorstr, check_file, set_logging
+from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 
 logger = set_logging(__name__)
 
@@ -44,18 +44,25 @@ def evaluate(
     pbar = tqdm(dataloader, desc=pbar_desc, leave=False, total=num_batches)
     saved_plot = False
 
+    cuda = device.type == 'cuda'
     for batch_idx, (tensors, targets, stems) in enumerate(pbar):
         tensors = tensors.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        logits = model(tensors)
-        loss, loss_dict = criterion(logits, targets)
+        if cuda:
+            with torch.amp.autocast('cuda'):
+                logits = model(tensors)
+                loss, loss_dict = criterion(logits, targets)
+        else:
+            logits = model(tensors)
+            loss, loss_dict = criterion(logits, targets)
 
         total_loss += loss_dict['loss'].item()
         total_bce += loss_dict['bce'].item()
         total_dice += loss_dict['dice'].item()
 
         metrics.update(logits, targets)
+
 
         # Save first batch visualization if requested
         if plots and save_dir and not saved_plot:
@@ -147,6 +154,7 @@ def run_test(opt):
 
 def parse_opt():
     parser = argparse.ArgumentParser(description="Evaluate Landslide Segmentation Model")
+    parser.add_argument('--config', type=str, default='', help='path to yaml configuration file (e.g. configs/test.yaml)')
     parser.add_argument('--weights', type=str, default='', help='model weights path (.pt)')
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
@@ -157,12 +165,13 @@ def parse_opt():
     parser.add_argument('--img-size', type=int, default=512, help='inference image size')
     parser.add_argument('--conf-thres', type=float, default=0.5, help='binary classification threshold')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--workers', type=int, default=0, help='dataloader workers')
+    parser.add_argument('--workers', type=int, default=2, help='dataloader workers')
     parser.add_argument('--project', default='runs/val', help='save directory project')
     parser.add_argument('--name', default='exp', help='save directory experiment name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--plots', action='store_true', default=True, help='save prediction visual plots')
-    return parser.parse_args()
+    return parse_options_with_config(parser)
+
 
 
 if __name__ == '__main__':

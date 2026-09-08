@@ -155,16 +155,27 @@ Run the automated 6-stage test suite to verify datasets, models, loss functions,
 python smoke_test.py
 ```
 
-### 3. Model Training
-Train standard U-Net with RGB + DTM inputs:
+### 3. Model Training (Maximized GPU Utilization)
+
+You can launch training using a pre-configured YAML file (`--config`), eliminating the need to type arguments repeatedly:
+
 ```bash
-python train.py --cfg models/architectures/unet.yaml --inputs rgb_dtm --epochs 50 --batch-size 8 --device 0
+# Standard High-Throughput Training (RGB + DTM)
+python train.py --config configs/train.yaml
+
+# Full 7-Channel Multi-Modal Training
+python train.py --config configs/train_multimodal.yaml
+
+# Fine-Tuning from Official Carvana U-Net Weights
+python train.py --config configs/train_finetune_carvana.yaml
 ```
 
-Train lightweight U-Net with Topography only:
-```bash
-python train.py --cfg models/architectures/unet_lite.yaml --inputs topo_only --epochs 50 --batch-size 8 --device 0
-```
+> [!TIP]
+> You can override any configuration parameter on the fly:
+> ```bash
+> python train.py --config configs/train.yaml --epochs 100 --batch-size 16 --name custom_run
+> ```
+> See [`CONFIGS.md`](file:///D:/landslide/CONFIGS.md) for full configuration details.
 
 ### 4. Transfer Learning & Official Pretrained Weights
 Initialize training from official U-Net pretrained weights (`milesial/Pytorch-UNet` Carvana weights) with automatic download and layer remapping:
@@ -189,16 +200,17 @@ python train.py --resume runs/train/exp/weights/last.pt
 ```
 
 ### 6. Evaluation
-Evaluate checkpoint on the validation set:
+Evaluate checkpoint on the validation set using a configuration file or CLI flags:
 ```bash
-python test.py --weights runs/train/exp/weights/best.pt --data data/landslide.yaml --split val --conf-thres 0.5
+python test.py --config configs/test.yaml
 ```
 
 ### 7. Inference & Visual Overlays
 Generate segmentation masks and visual comparison heatmaps:
 ```bash
-python predict.py --weights runs/train/exp/weights/best.pt --source dataset/dataset_1/validation --conf-thres 0.5
+python predict.py --config configs/predict.yaml
 ```
+
 
 Outputs:
 - Binary PNG masks saved to `runs/predict/exp/masks/`

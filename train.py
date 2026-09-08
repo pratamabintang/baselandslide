@@ -18,7 +18,7 @@ from utils.loss import BCEDiceLoss
 from utils.metrics import SegmentationMetrics
 from utils.plots import plot_results, plot_predictions
 from utils.torch_utils import select_device, init_seeds, model_info, EarlyStopping, load_pretrained_weights
-from utils.general import increment_path, colorstr, check_file, set_logging
+from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 from test import evaluate
 
 logger = set_logging(__name__)
@@ -88,8 +88,8 @@ def train(hyp, opt, device):
         with open(save_dir / 'hyp.yaml', 'w') as f:
             yaml.safe_dump(hyp, f, sort_keys=False)
 
-    # Initialize seeds
-    init_seeds(opt.seed)
+    # Initialize seeds (enables cuDNN benchmark by default for accelerated convolutions)
+    init_seeds(opt.seed, deterministic=opt.deterministic)
 
     # Load dataset configuration
     data_yaml = check_file(opt.data)
@@ -111,6 +111,7 @@ def train(hyp, opt, device):
         print(f"  Target Classes     : {nc} ({data_dict.get('names', ['landslide'])})")
         print(f"  Image Resolution   : {opt.img_size}x{opt.img_size}")
         print(f"  Batch Size         : {opt.batch_size}")
+        print(f"  RAM Caching        : {'Enabled (Zero Disk I/O)' if opt.cache_ram else 'Disabled'}")
         print(f"  Total Epochs       : {opt.epochs}")
         print(f"  Save Directory     : {save_dir}")
         print("-" * 75)
@@ -126,7 +127,8 @@ def train(hyp, opt, device):
         augment=True,
         hyp=hyp,
         shuffle=True,
-        num_workers=opt.workers
+        num_workers=opt.workers,
+        cache_ram=opt.cache_ram
     )
 
     val_loader, val_dataset = create_dataloader(
@@ -137,10 +139,12 @@ def train(hyp, opt, device):
         img_size=opt.img_size,
         augment=False,
         shuffle=False,
-        num_workers=opt.workers
+        num_workers=opt.workers,
+        cache_ram=opt.cache_ram
     )
     print(f"      -> Train Samples: {len(train_dataset)} ({len(train_loader)} batches/epoch)")
     print(f"      -> Val Samples  : {len(val_dataset)} ({len(val_loader)} batches/epoch)")
+
 
     # Step 2: Build Model
     print(colorstr('bold', '[2/5] Building model architecture...'))
@@ -221,6 +225,7 @@ def train(hyp, opt, device):
             bar_format="{l_bar}{bar:25}{r_bar}"
         )
 
+        accumulate = max(1, opt.accumulate)
         for batch_idx, (tensors, targets, stems) in enumerate(pbar):
             tensors = tensors.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
@@ -229,14 +234,21 @@ def train(hyp, opt, device):
                 with torch.amp.autocast('cuda'):
                     logits = model(tensors)
                     loss, loss_dict = criterion(logits, targets)
+                    if accumulate > 1:
+                        loss = loss / accumulate
             else:
                 logits = model(tensors)
                 loss, loss_dict = criterion(logits, targets)
+                if accumulate > 1:
+                    loss = loss / accumulate
 
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
+
+            if (batch_idx + 1) % accumulate == 0 or (batch_idx + 1) == len(train_loader):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
 
             b_loss = loss_dict['loss'].item()
             b_bce = loss_dict['bce'].item()
@@ -357,7 +369,8 @@ def train(hyp, opt, device):
 
 def parse_opt():
     parser = argparse.ArgumentParser(description="Train Landslide Segmentation Model")
-    parser.add_argument('--weights', type=str, default='', help='initial pretrained weights path (e.g. weights.pt)')
+    parser.add_argument('--config', type=str, default='', help='path to yaml configuration file (e.g. configs/train.yaml)')
+    parser.add_argument('--weights', type=str, default='', help='initial pretrained weights path (e.g. weights.pt or unet_carvana)')
     parser.add_argument('--resume', nargs='?', const='get_last', default=False,
                         help='resume most recent training run or specify path to last.pt (e.g. --resume or --resume runs/train/exp/weights/last.pt)')
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
@@ -370,13 +383,18 @@ def parse_opt():
     parser.add_argument('--img-size', type=int, default=512, help='image resolution')
     parser.add_argument('--conf-thres', type=float, default=0.5, help='validation binary threshold')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--workers', type=int, default=0, help='dataloader workers')
+    parser.add_argument('--workers', type=int, default=2, help='dataloader workers (2-4 recommended for Windows/CUDA)')
+    parser.add_argument('--cache-ram', action='store_true', help='cache preprocessed dataset arrays in RAM for maximum GPU saturation')
+    parser.add_argument('--deterministic', action='store_true', help='enable deterministic cuDNN (disables benchmark auto-tuner)')
+    parser.add_argument('--accumulate', type=int, default=1, help='gradient accumulation steps')
     parser.add_argument('--project', default='runs/train', help='save directory project')
     parser.add_argument('--name', default='exp', help='save directory experiment name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--patience', type=int, default=15, help='early stopping patience')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
-    return parser.parse_args()
+    return parse_options_with_config(parser)
+
+
 
 
 if __name__ == '__main__':

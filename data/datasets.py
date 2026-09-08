@@ -76,7 +76,8 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
                   inputs: Union[str, List[str]] = 'rgb_only',
                   img_size: Union[int, Tuple[int, int]] = (512, 512),
                   augment: bool = False,
-                  hyp: Optional[Dict] = None) -> BaseMultiModalDataset:
+                  hyp: Optional[Dict] = None,
+                  cache_ram: bool = False) -> BaseMultiModalDataset:
     """
     Dataset Factory: Instantiates the appropriate registered dataset adapter based on YAML config.
 
@@ -87,6 +88,7 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
         img_size: Target image dimensions (H, W)
         augment: Whether to apply data augmentations
         hyp: Hyperparameters dictionary
+        cache_ram: Whether to cache decoded arrays in RAM for maximum GPU saturation
 
     Returns:
         BaseMultiModalDataset: Concrete dataset adapter instance conforming to standard interface
@@ -122,7 +124,8 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
         augment=augment,
         hyp=hyp,
         presets=presets,
-        modality_specs=modality_specs
+        modality_specs=modality_specs,
+        cache_ram=cache_ram
     )
 
     return dataset_instance
@@ -130,9 +133,9 @@ def build_dataset(data_yaml_path: Union[str, Path, Dict],
 
 def create_dataloader(data_yaml_path, split='train', inputs='rgb_only', batch_size=8,
                       img_size=512, augment=False, hyp=None, shuffle=True, num_workers=0,
-                      pin_memory=True):
+                      pin_memory=True, cache_ram=False):
     """
-    Construct DataLoader for any registered dataset adapter.
+    Construct DataLoader for any registered dataset adapter with multi-worker prefetching optimizations.
     """
     dataset = build_dataset(
         data_yaml_path=data_yaml_path,
@@ -140,16 +143,24 @@ def create_dataloader(data_yaml_path, split='train', inputs='rgb_only', batch_si
         inputs=inputs,
         img_size=img_size,
         augment=augment,
-        hyp=hyp
+        hyp=hyp,
+        cache_ram=cache_ram
     )
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=(split == 'train' and len(dataset) > batch_size)
-    )
+    loader_kwargs = {
+        'batch_size': batch_size,
+        'shuffle': shuffle,
+        'num_workers': num_workers,
+        'pin_memory': pin_memory and torch.cuda.is_available(),
+        'drop_last': (split == 'train' and len(dataset) > batch_size),
+    }
+
+    # Enable persistent workers and prefetching when multi-threading is active
+    if num_workers > 0:
+        loader_kwargs['persistent_workers'] = True
+        loader_kwargs['prefetch_factor'] = 2
+
+    dataloader = DataLoader(dataset, **loader_kwargs)
 
     return dataloader, dataset
+

@@ -1,0 +1,30 @@
+# ==============================================================================
+# Fine-Tuning from Official PyTorch U-Net (Carvana Pretrained Weights)
+# ==============================================================================
+# Usage:
+#   python train.py --config configs/train_finetune_carvana.yaml
+# ==============================================================================
+
+cfg: models/architectures/unet.yaml
+data: data/landslide.yaml
+hyp: data/hyp.scratch.yaml
+inputs: rgb_only                  # RGB fine-tuning from Carvana backbone
+weights: unet_carvana             # Auto-downloads official milesial/Pytorch-UNet weights
+resume: false
+
+epochs: 50
+batch_size: 12
+img_size: 512
+conf_thres: 0.5
+
+device: '0'
+workers: 2
+cache_ram: true
+accumulate: 1
+deterministic: false
+
+project: runs/train
+name: exp_carvana_finetune
+exist_ok: false
+patience: 15
+seed: 42

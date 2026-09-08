@@ -37,11 +37,14 @@ class FolderStructureAdapter(BaseMultiModalDataset):
                  augment: bool = False, hyp: Optional[Dict] = None,
                  presets: Optional[Dict] = None,
                  modality_specs: Optional[Dict[str, Dict]] = None,
-                 label_folder: str = 'LABEL'):
+                 label_folder: str = 'LABEL',
+                 cache_ram: bool = False):
         super().__init__(root_dir, split, inputs, img_size, augment, hyp, presets)
 
         self.split_dir = self.root_dir / split if (self.root_dir / split).exists() else self.root_dir
         self.label_folder = label_folder
+        self.cache_ram = cache_ram or (hyp.get('cache_ram', False) if hyp else False)
+        self._cache = {}
 
         # Merge modality specs
         self.specs = DEFAULT_MODALITY_SPECS.copy()
@@ -61,6 +64,7 @@ class FolderStructureAdapter(BaseMultiModalDataset):
             raise RuntimeError(f"No matching samples found in {self.split_dir} for modalities {self._active_inputs}")
 
         self.transform = MultiModalTransform(augment=self.augment, hyp=self.hyp, img_size=self.img_size)
+
 
     @property
     def in_channels(self) -> int:
@@ -201,17 +205,25 @@ class FolderStructureAdapter(BaseMultiModalDataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
         stem = self._samples[idx]
 
-        # Load and stack modalities
-        mod_arrays = [self.load_modality_array(mod, stem) for mod in self._active_inputs]
-        multi_channel_tensor = np.concatenate(mod_arrays, axis=-1)
+        if self.cache_ram and stem in self._cache:
+            multi_channel_tensor, label_mask = self._cache[stem]
+            # Copy to avoid modifying cached arrays in-place during spatial augmentations
+            multi_channel_tensor = multi_channel_tensor.copy()
+            label_mask = label_mask.copy()
+        else:
+            # Load and stack modalities
+            mod_arrays = [self.load_modality_array(mod, stem) for mod in self._active_inputs]
+            multi_channel_tensor = np.concatenate(mod_arrays, axis=-1)
+            label_mask = self.load_label_mask(stem)
 
-        # Load label
-        label_mask = self.load_label_mask(stem)
+            if self.cache_ram:
+                self._cache[stem] = (multi_channel_tensor.copy(), label_mask.copy())
 
         # Apply synchronized spatial augmentations
         tensor, mask = self.transform(multi_channel_tensor, label_mask)
 
         return tensor, mask, stem
+
 
 
 class CustomDatasetWrapper(BaseMultiModalDataset):
