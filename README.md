@@ -215,20 +215,39 @@ python train.py --resume
 python train.py --resume runs/train/exp/weights/last.pt
 ```
 
-### 6. Evaluation
+### 6. Automated Sequential Benchmark Suite (PowerShell)
+Run a systematic benchmark across combinations of **RGB-Only** vs. **RGB-DTM**, **Pure Direct U-Net** vs. **U-Net Proj**, and **Concat** vs. **Addition** fusion:
+```powershell
+# Run all 6 benchmark combinations sequentially
+.\run_experiments.ps1 -Epochs 50 -BatchSize 8
+
+# Run only selected experiments (e.g. Experiments 1, 3, and 6)
+.\run_experiments.ps1 -SelectIds 1,3,6 -Epochs 50
+
+# Dry-run preview without executing
+.\run_experiments.ps1 -DryRun
+```
+Outputs an interactive comparison leaderboard and exports `runs/train/experiments_summary.csv`.
+
+### 7. Genetic Hyperparameter Evolution
+Automatically search the continuous hyperparameter space (`lr0`, `lrf`, `momentum`, `weight_decay`, `bce_weight`, `dice_weight`, `pos_weight`, augmentations) using genetic mutation:
+```bash
+python evolve.py --config configs/evolve.yaml --generations 30 --epochs 15
+```
+
+### 8. Evaluation
 Evaluate checkpoint on the validation set using a configuration file or CLI flags:
 ```bash
 python test.py --config configs/test.yaml
 ```
 
-### 7. Inference & Visual Overlays
+### 9. Inference & Visual Overlays
 Generate segmentation masks and visual comparison heatmaps:
 ```bash
 python predict.py --config configs/predict.yaml
 ```
 
-
 Outputs:
 - Binary PNG masks saved to `runs/predict/exp/masks/`
-- 3-panel visual overlay figures saved to `runs/predict/exp/overlays/`
+- 5-panel visual overlay comparison figures saved to `runs/predict/exp/overlays/`
 
