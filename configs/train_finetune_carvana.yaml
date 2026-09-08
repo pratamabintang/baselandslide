@@ -19,7 +19,7 @@ conf_thres: 0.5
 
 device: '0'
 workers: 2
-cache_ram: true
+cache_ram: false                  # Low RAM mode
 accumulate: 1
 deterministic: false
 

@@ -11,19 +11,19 @@ cfg: models/architectures/unet.yaml
 data: data/landslide.yaml
 hyp: data/hyp.scratch.yaml
 inputs: rgb_dtm                   # Presets: rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all
-weights: ''                       # Pretrained weights path or alias (e.g. unet_carvana)
+weights: unet_carvana             # Pretrained official PyTorch U-Net weights (Carvana)
 resume: false                     # Set true or path to resume (e.g. runs/train/exp/weights/last.pt)
 
 # Training Hyperparameters
 epochs: 50
-batch_size: 12                    # Optimal for 8GB VRAM (RTX 2060 Super)
+batch_size: 8                     # Batch size
 img_size: 512
 conf_thres: 0.5
 
 # Hardware & Throughput Optimization
 device: '0'                       # '0' for CUDA GPU, 'cpu' for CPU
-workers: 2                        # Multi-worker prefetching on Windows
-cache_ram: true                   # Cache decoded tensors in RAM for 0ms disk I/O
+workers: 2                        # Multi-worker prefetching on Windows (0 if RAM is strictly limited)
+cache_ram: false                  # Set false for low RAM usage & instant startup (set true only if 32GB+ RAM)
 accumulate: 1                     # Gradient accumulation steps (e.g. 2 for effective batch 24)
 deterministic: false              # Enables cuDNN benchmark kernel auto-tuning
 
