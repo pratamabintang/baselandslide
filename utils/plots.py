@@ -28,41 +28,57 @@ def plot_results(csv_path, save_dir=''):
         val_prec = data[:, 5]
         val_rec = data[:, 6]
 
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(13, 10))
 
-        # Loss Curve
-        axes[0, 0].plot(epochs, train_loss, 'b-', label='Train Loss')
-        axes[0, 0].plot(epochs, val_loss, 'r--', label='Val Loss')
-        axes[0, 0].set_title('Loss vs Epochs')
+        # Best metrics indices
+        best_dice_idx = int(np.argmax(val_dice))
+        best_loss_idx = int(np.argmin(val_loss))
+        best_iou_idx = int(np.argmax(val_iou))
+        best_dice_epoch = int(epochs[best_dice_idx])
+
+        # 1. Loss Curve
+        axes[0, 0].plot(epochs, train_loss, 'b-', label='Train Loss', alpha=0.85)
+        axes[0, 0].plot(epochs, val_loss, 'r--', label='Val Loss', alpha=0.85)
+        axes[0, 0].scatter(epochs[best_loss_idx], val_loss[best_loss_idx], color='red', s=90, zorder=5, edgecolors='black',
+                           label=f'★ Min Val: {val_loss[best_loss_idx]:.4f} (Ep {int(epochs[best_loss_idx])})')
+        axes[0, 0].set_title('Loss vs Epochs', fontsize=12, fontweight='bold')
         axes[0, 0].set_xlabel('Epoch')
         axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].grid(True)
-        axes[0, 0].legend()
+        axes[0, 0].grid(True, linestyle=':', alpha=0.6)
+        axes[0, 0].legend(loc='best')
 
-        # IoU Curve
-        axes[0, 1].plot(epochs, val_iou, 'g-', label='Val mIoU')
-        axes[0, 1].set_title('Mean IoU (Jaccard Index)')
+        # 2. IoU Curve
+        axes[0, 1].plot(epochs, val_iou * 100, 'g-', label='Val mIoU', alpha=0.85)
+        axes[0, 1].scatter(epochs[best_iou_idx], val_iou[best_iou_idx] * 100, color='forestgreen', s=90, zorder=5, edgecolors='black',
+                           label=f'★ Best mIoU: {val_iou[best_iou_idx]*100:.2f}% (Ep {int(epochs[best_iou_idx])})')
+        axes[0, 1].set_title('Mean IoU (Jaccard Index)', fontsize=12, fontweight='bold')
         axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('IoU')
-        axes[0, 1].grid(True)
-        axes[0, 1].legend()
+        axes[0, 1].set_ylabel('mIoU (%)')
+        axes[0, 1].grid(True, linestyle=':', alpha=0.6)
+        axes[0, 1].legend(loc='best')
 
-        # Dice / F1 Score
-        axes[1, 0].plot(epochs, val_dice, 'm-', label='Val Dice / F1')
-        axes[1, 0].set_title('Dice Coefficient (F1-Score)')
+        # 3. Dice / F1 Score
+        axes[1, 0].plot(epochs, val_dice * 100, 'm-', label='Val Dice / F1', alpha=0.85)
+        axes[1, 0].scatter(epochs[best_dice_idx], val_dice[best_dice_idx] * 100, color='gold', marker='*', s=220, zorder=5, edgecolors='black',
+                           label=f'★ Best Dice: {val_dice[best_dice_idx]*100:.2f}% (Ep {best_dice_epoch})')
+        axes[1, 0].set_title('Dice Coefficient (F1-Score)', fontsize=12, fontweight='bold')
         axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Dice')
-        axes[1, 0].grid(True)
-        axes[1, 0].legend()
+        axes[1, 0].set_ylabel('Dice (%)')
+        axes[1, 0].grid(True, linestyle=':', alpha=0.6)
+        axes[1, 0].legend(loc='best')
 
-        # Precision & Recall
-        axes[1, 1].plot(epochs, val_prec, 'c-', label='Precision')
-        axes[1, 1].plot(epochs, val_rec, 'orange', linestyle='--', label='Recall')
-        axes[1, 1].set_title('Precision & Recall')
+        # 4. Precision & Recall
+        axes[1, 1].plot(epochs, val_prec * 100, 'c-', label='Precision', alpha=0.85)
+        axes[1, 1].plot(epochs, val_rec * 100, 'darkorange', linestyle='--', label='Recall', alpha=0.85)
+        axes[1, 1].scatter(epochs[best_dice_idx], val_prec[best_dice_idx] * 100, color='cyan', s=70, zorder=5, edgecolors='black',
+                           label=f'Prec @ Best: {val_prec[best_dice_idx]*100:.2f}%')
+        axes[1, 1].scatter(epochs[best_dice_idx], val_rec[best_dice_idx] * 100, color='darkorange', s=70, zorder=5, edgecolors='black',
+                           label=f'Rec @ Best: {val_rec[best_dice_idx]*100:.2f}%')
+        axes[1, 1].set_title('Precision & Recall', fontsize=12, fontweight='bold')
         axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Score')
-        axes[1, 1].grid(True)
-        axes[1, 1].legend()
+        axes[1, 1].set_ylabel('Score (%)')
+        axes[1, 1].grid(True, linestyle=':', alpha=0.6)
+        axes[1, 1].legend(loc='best')
 
         plt.tight_layout()
         save_path = Path(save_dir) / 'results.png' if save_dir else csv_path.parent / 'results.png'

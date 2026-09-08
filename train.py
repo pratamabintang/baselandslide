@@ -38,6 +38,8 @@ def train(hyp, opt, device):
     start_epoch = 1
     best_dice = 0.0
     best_iou = 0.0
+    best_epoch = 0
+    best_scores = {}
 
     # -------------------------------------------------------------------------
     # Handle Resume Setup
@@ -67,10 +69,12 @@ def train(hyp, opt, device):
         start_epoch = ckpt.get('epoch', 0) + 1
         best_dice = ckpt.get('best_dice', ckpt.get('val_dice', 0.0))
         best_iou = ckpt.get('best_iou', ckpt.get('val_iou', 0.0))
+        best_epoch = ckpt.get('best_epoch', ckpt.get('epoch', 0))
+        best_scores = ckpt.get('best_scores', {})
 
         print(colorstr('bold', 'yellow', f"\n[RESUME] Resuming training from {resume_path}"))
         print(f"  Resuming Epoch     : {start_epoch}/{opt.epochs}")
-        print(f"  Previous Best Dice : {best_dice * 100:.2f}%, Best mIoU: {best_iou * 100:.2f}%")
+        print(f"  Previous Best Dice : {best_dice * 100:.2f}%, Best mIoU: {best_iou * 100:.2f}% (Epoch {best_epoch})")
         print(f"  Run Directory      : {save_dir}\n")
 
     else:
@@ -313,10 +317,23 @@ def train(hyp, opt, device):
         if is_best:
             best_dice = val_dice
             best_iou = val_iou
+            best_epoch = epoch
+            best_scores = {
+                'epoch': epoch,
+                'train_loss': float(avg_train_loss),
+                'val_loss': float(val_loss),
+                'iou': float(val_iou),
+                'dice': float(val_dice),
+                'precision': float(val_prec),
+                'recall': float(val_rec),
+                'accuracy': float(val_acc)
+            }
             row_str += colorstr('bright_green', ' (* Best)')
             # Save best checkpoint
             torch.save({
                 'epoch': epoch,
+                'best_epoch': best_epoch,
+                'best_scores': best_scores,
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'best_dice': best_dice,
@@ -332,6 +349,8 @@ def train(hyp, opt, device):
         # Save latest checkpoint
         torch.save({
             'epoch': epoch,
+            'best_epoch': best_epoch,
+            'best_scores': best_scores,
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
             'val_dice': val_dice,
@@ -352,16 +371,47 @@ def train(hyp, opt, device):
 
     # Training Completion Summary
     total_time = (time.time() - t0) / 60
-    print("\n" + "=" * 75)
-    print(colorstr('bold', 'green', '[DONE] TRAINING COMPLETE!'))
-    print("=" * 75)
-    print(f"  Total Training Time : {total_time:.2f} minutes")
-    print(f"  Best Validation Dice: {best_dice * 100:.2f}%")
-    print(f"  Best Validation mIoU: {best_iou * 100:.2f}%")
-    print(f"  Saved Best Checkpoint: {best_pt}")
-    print(f"  Saved Last Checkpoint: {last_pt}")
-    print(f"  Saved Results Log   : {results_csv}")
-    print("=" * 75 + "\n")
+    total_epochs_trained = epoch - start_epoch + 1
+    print("\n" + "=" * 78)
+    print(colorstr('bold', 'bright_green', '[DONE] TRAINING COMPLETE!'))
+    print("=" * 78)
+    print(f"  Total Training Time : {total_time:.2f} minutes ({total_time / max(total_epochs_trained, 1):.2f} min/epoch)")
+    print(f"  Total Epochs Trained: {total_epochs_trained}")
+    print("-" * 78)
+    print(colorstr('bold', 'bright_yellow', f"  ★ BEST VALIDATION METRICS (Achieved at Epoch {best_epoch}):"))
+    print(colorstr('bold', 'bright_green',  f"    • Best Validation Dice (F1) : {best_dice * 100:6.2f}%"))
+    print(colorstr('bold', 'bright_green',  f"    • Best Validation mIoU      : {best_iou * 100:6.2f}%"))
+    if best_scores:
+        print(f"    • Precision @ Best Epoch    : {best_scores.get('precision', 0.0) * 100:6.2f}%")
+        print(f"    • Recall @ Best Epoch       : {best_scores.get('recall', 0.0) * 100:6.2f}%")
+        print(f"    • Pixel Accuracy @ Best Ep  : {best_scores.get('accuracy', 0.0) * 100:6.2f}%")
+        print(f"    • Val Loss @ Best Epoch     : {best_scores.get('val_loss', 0.0):.4f}")
+        print(f"    • Train Loss @ Best Epoch   : {best_scores.get('train_loss', 0.0):.4f}")
+    print("-" * 78)
+    print(f"  Artifacts & Checkpoints:")
+    print(f"    • Best Checkpoint   : {best_pt}")
+    print(f"    • Last Checkpoint   : {last_pt}")
+    print(f"    • Results CSV Log   : {results_csv}")
+    print(f"    • Best Summary Log  : {save_dir / 'best_metrics.yaml'}")
+    print(f"    • Visual Curves     : {save_dir / 'results.png'}")
+    print("=" * 78 + "\n")
+
+    # Save best metrics summary to YAML
+    if best_scores:
+        best_summary_file = save_dir / 'best_metrics.yaml'
+        with open(best_summary_file, 'w') as f:
+            yaml.safe_dump({
+                'best_epoch': int(best_epoch),
+                'best_dice': float(best_dice),
+                'best_iou': float(best_iou),
+                'best_precision': float(best_scores.get('precision', 0.0)),
+                'best_recall': float(best_scores.get('recall', 0.0)),
+                'best_accuracy': float(best_scores.get('accuracy', 0.0)),
+                'val_loss': float(best_scores.get('val_loss', 0.0)),
+                'train_loss': float(best_scores.get('train_loss', 0.0)),
+                'total_epochs': int(epoch),
+                'training_time_minutes': round(float(total_time), 2)
+            }, f, sort_keys=False)
 
     # Plot metrics
     plot_results(results_csv, save_dir=save_dir)
