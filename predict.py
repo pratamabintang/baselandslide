@@ -169,8 +169,15 @@ def compute_sample_metrics(pred_mask, gt_mask):
     dice = 1.0 if (2 * tp + fp + fn) == 0 else float(2 * tp) / float(2 * tp + fp + fn)
 
     # Precision & Recall
-    precision = 1.0 if (tp + fp) == 0 else float(tp) / float(tp + fp)
-    recall = 1.0 if (tp + fn) == 0 else float(tp) / float(tp + fn)
+    if tp + fp == 0:
+        precision = 1.0 if gt_b.sum() == 0 else 0.0
+    else:
+        precision = float(tp) / float(tp + fp)
+
+    if tp + fn == 0:
+        recall = 1.0
+    else:
+        recall = float(tp) / float(tp + fn)
 
     return {
         'iou': iou,
