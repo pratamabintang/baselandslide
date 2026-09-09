@@ -27,10 +27,8 @@ def resolve_inputs(inputs, presets=None):
         'all': ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT'],
         'rgb_add_dtm': ['IMAGE', 'DTM_NORM'],
         'rgb_add_slope': ['IMAGE', 'SLOPE'],
-        'rgb_add_aspect': ['IMAGE', 'ASPECT'],
         'rgb+dtm': ['IMAGE', 'DTM_NORM'],
         'rgb+slope': ['IMAGE', 'SLOPE'],
-        'rgb+aspect': ['IMAGE', 'ASPECT'],
     }
     merged_presets = default_presets.copy()
     if presets:

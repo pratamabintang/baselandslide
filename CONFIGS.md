@@ -220,3 +220,30 @@ name: exp_evolve
 exist_ok: false
 resume: false
 ```
+
+---
+
+## 🔬 Methodological & Geospatial Design Guidelines
+
+### 1. Fusion Strategies: Concatenation vs. Addition
+- **Channel Concatenation (`concat`) [Recommended]**:
+  - Concatenates modalities into dedicated input channels (e.g. RGB + DTM = 4ch, RGB + Topo = 7ch).
+  - Preserves individual modality identity and cross-channel gradients, allowing convolutional kernels to learn specialized feature filters for optical textures vs. topographic elevation/gradients.
+  - Supports multi-channel continuous and directional modalities (e.g. 2-channel trigonometric Aspect).
+- **Element-Wise Addition (`add`)**:
+  - Modulates 3-channel optical RGB with single-channel scalar topography (e.g. DTM_NORM or SLOPE).
+  - Renormalized as $\frac{\text{RGB} + \text{Aux}}{1 + N_{\text{aux}}} \in [0, 1]$ to eliminate the $[0, 2]$ distribution shift.
+  - **Constraint**: Multi-channel directional modalities (such as 2-channel Aspect $(\sin\theta, \cos\theta)$) cannot be added to 3-channel RGB and must use `concat`.
+
+### 2. Topographic Aspect NoData (NaN) Handling
+- In GIS rasters, NoData / undefined / flat terrain values (NaN, Inf, $-9999$, $-1$) are strictly encoded as **zero-magnitude vectors** $(0.0, 0.0)$, rather than mapping $\text{angle}=0^\circ$ to True North $(0.0, 1.0)$.
+- This prevents artificial slope direction bias in flat plains and unmeasured boundaries.
+
+### 3. Spatial Data Leakage & Geospatial Partitioning
+- **Spatial Autocorrelation Leakage**: Random tile splitting in geospatial segmentation causes extreme data leakage because adjacent survey patches share nearly identical lithology, vegetation, and terrain features.
+- **Regional Corridor / Catchment Isolation**: Dataset splits must partition entire corridor sections (e.g., Chainage 17 in validation; Chainages 1, 2, 18, 19 in training) to evaluate true out-of-region generalization.
+- **Audit Tool**:
+  ```bash
+  python -m data.spatial --data data/landslide.yaml --audit
+  ```
+

@@ -59,16 +59,38 @@ class FolderStructureAdapter(BaseMultiModalDataset):
         self._active_inputs = self._resolve_inputs(inputs, presets)
         if self.fusion in ['add', 'addition', 'sum']:
             # Addition fusion: auxiliary modalities added to 3-channel RGB
+            # Validate upfront that all auxiliary modalities are 1-channel scalar rasters
+            for mod in self._active_inputs:
+                if mod != 'IMAGE':
+                    c_mod = self.specs.get(mod, {'channels': 1})['channels']
+                    if c_mod > 1:
+                        raise ValueError(
+                            f"Additive fusion (fusion='add') cannot be used with multi-channel modality '{mod}' ({c_mod} channels). "
+                            f"Additive fusion requires 1-channel scalar rasters (e.g. DTM_NORM, SLOPE) to broadcast across 3 RGB channels. "
+                            f"For multi-channel or directional modalities like ASPECT, use fusion='concat'."
+                        )
             self._in_channels = 3 if ('IMAGE' in self._active_inputs or len(self._active_inputs) == 0) else self.specs.get(self._active_inputs[0], {'channels': 1})['channels']
         else:
             self._in_channels = sum(self.specs.get(mod, {'channels': 1})['channels'] for mod in self._active_inputs)
 
-        # Index valid samples
-        self._samples = self._find_valid_samples()
-        if len(self._samples) == 0:
-            raise RuntimeError(f"No matching samples found in {self.split_dir} for modalities {self._active_inputs}")
+        # Determine channel index range for ASPECT if present
+        self.aspect_slice = None
+        if self.fusion not in ['add', 'addition', 'sum'] and 'ASPECT' in self._active_inputs:
+            ch_offset = 0
+            for mod in self._active_inputs:
+                c_mod = self.specs.get(mod, {'channels': 1})['channels']
+                if mod == 'ASPECT':
+                    self.aspect_slice = (ch_offset, ch_offset + c_mod)
+                    break
+                ch_offset += c_mod
 
-        self.transform = MultiModalTransform(augment=self.augment, hyp=self.hyp, img_size=self.img_size)
+        self.transform = MultiModalTransform(
+            augment=self.augment,
+            hyp=self.hyp,
+            img_size=self.img_size,
+            aspect_slice=self.aspect_slice
+        )
+        self._samples = self._find_valid_samples()
 
 
     @property
@@ -93,10 +115,8 @@ class FolderStructureAdapter(BaseMultiModalDataset):
             'all': ['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT'],
             'rgb_add_dtm': ['IMAGE', 'DTM_NORM'],
             'rgb_add_slope': ['IMAGE', 'SLOPE'],
-            'rgb_add_aspect': ['IMAGE', 'ASPECT'],
             'rgb+dtm': ['IMAGE', 'DTM_NORM'],
             'rgb+slope': ['IMAGE', 'SLOPE'],
-            'rgb+aspect': ['IMAGE', 'ASPECT'],
         }
         merged_presets = default_presets.copy()
         if presets:
@@ -185,10 +205,17 @@ class FolderStructureAdapter(BaseMultiModalDataset):
         elif norm_type == 'sincos' or mod == 'ASPECT':
             img = Image.open(mod_path)
             arr = np.array(img, dtype=np.float32)
-            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-            rad = arr * (np.pi / 180.0)
+            # Detect invalid / NoData pixels before trig encoding
+            # In GIS rasters, NoData is commonly NaN, Inf, or negative (-9999, -1 for flat terrain)
+            invalid_mask = np.isnan(arr) | np.isinf(arr) | (arr < 0) | (arr > 360.0)
+            valid_arr = np.where(invalid_mask, 0.0, arr)
+            rad = valid_arr * (np.pi / 180.0)
             sin_aspect = np.sin(rad)
             cos_aspect = np.cos(rad)
+            # Explicitly set both directional components to 0.0 for NoData / invalid pixels
+            # Vector magnitude = 0 (undefined/flat), preventing false North-facing (0, 1) direction
+            sin_aspect[invalid_mask] = 0.0
+            cos_aspect[invalid_mask] = 0.0
             return np.stack([sin_aspect, cos_aspect], axis=-1)
 
         else:
@@ -223,7 +250,7 @@ class FolderStructureAdapter(BaseMultiModalDataset):
             label_mask = label_mask.copy()
         else:
             if self.fusion in ['add', 'addition', 'sum']:
-                # Element-wise addition fusion (both RGB and auxiliary modalities normalized to [0, 1])
+                # Element-wise addition fusion (normalized to [0, 1] to prevent distribution shift)
                 if 'IMAGE' in self._active_inputs:
                     base_arr = self.load_modality_array('IMAGE', stem)  # Shape (H, W, 3) in [0, 1]
                     aux_mods = [m for m in self._active_inputs if m != 'IMAGE']
@@ -233,12 +260,18 @@ class FolderStructureAdapter(BaseMultiModalDataset):
 
                 fused_arr = base_arr.copy()
                 for mod in aux_mods:
-                    aux_arr = self.load_modality_array(mod, stem)  # Normalized to [0, 1] (or [-1, 1] for aspect)
-                    # When base is (H, W, 3) and auxiliary is (H, W, 1), broadcasting adds aux to all 3 channels
-                    if fused_arr.ndim == 3 and fused_arr.shape[-1] == 3 and aux_arr.ndim == 3 and aux_arr.shape[-1] == 1:
-                        fused_arr = fused_arr + aux_arr
-                    else:
-                        fused_arr = fused_arr + aux_arr
+                    aux_arr = self.load_modality_array(mod, stem)  # Normalized to [0, 1]
+                    if aux_arr.ndim == 3 and aux_arr.shape[-1] != 1:
+                        raise ValueError(
+                            f"Additive fusion ('add') cannot add multi-channel modality '{mod}' (shape {aux_arr.shape}) "
+                            f"to RGB base. Only 1-channel scalar modalities (such as DTM_NORM or SLOPE) can be added. "
+                            f"Use fusion='concat' for multi-channel modalities like ASPECT."
+                        )
+                    fused_arr = fused_arr + aux_arr
+
+                # Renormalize sum to [0, 1] to eliminate distribution shift (RGB + DTM yields [0, 2])
+                num_terms = 1.0 + len(aux_mods)
+                fused_arr = fused_arr / num_terms
 
                 multi_channel_tensor = fused_arr
             else:
@@ -264,7 +297,9 @@ class CustomDatasetWrapper(BaseMultiModalDataset):
     into the standard BaseMultiModalDataset interface.
     """
 
-    def __init__(self, raw_dataset: Any, in_channels: int, active_inputs: Optional[List[str]] = None):
+    def __init__(self, raw_dataset: Any, in_channels: int, active_inputs: Optional[List[str]] = None,
+                 img_size: Tuple[int, int] = (512, 512)):
+        super().__init__(root_dir='.', split='train', img_size=img_size)
         self.raw_dataset = raw_dataset
         self._in_channels = in_channels
         self._active_inputs = active_inputs or [f"CH_{i}" for i in range(in_channels)]
@@ -312,6 +347,12 @@ class CustomDatasetWrapper(BaseMultiModalDataset):
 
         if mask.ndim == 2:
             mask = mask.unsqueeze(0)
+
+        # Enforce spatial dimensions
+        target_h, target_w = self.img_size
+        if tensor.shape[1] != target_h or tensor.shape[2] != target_w:
+            tensor = torch.nn.functional.interpolate(tensor.unsqueeze(0), size=(target_h, target_w), mode='bilinear', align_corners=False).squeeze(0)
+            mask = torch.nn.functional.interpolate(mask.unsqueeze(0), size=(target_h, target_w), mode='nearest').squeeze(0)
 
         self.validate_sample_output(tensor, mask, sample_id)
         return tensor, mask, str(sample_id)

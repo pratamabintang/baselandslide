@@ -22,5 +22,5 @@ head:
    [[5, 2], 1, Up, [256]],           # 6 - Decoder Stage 3 (up 5 + skip 2 -> 256)
    [[6, 1], 1, Up, [128]],           # 7 - Decoder Stage 2 (up 6 + skip 1 -> 128)
    [[7, 0], 1, Up, [64]],            # 8 - Decoder Stage 1 (up 7 + skip 0 -> 64)
-   [-1, 1, OutConv, [2]],            # 9 - Output 1x1 Conv (64 -> nc=2)
+   [-1, 1, OutConv, [nc]],           # 9 - Output 1x1 Conv (64 -> nc)
   ]

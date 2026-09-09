@@ -1,6 +1,6 @@
 # Multi-Modal Landslide Segmentation Baseline
 
-A modular, declarative PyTorch repository for multi-modal landslide segmentation using U-Net architectures, declarative YAML layer parsing, dynamic $1\times1$ input projection, and combined BCE + Dice loss.
+A modular, declarative PyTorch repository for multi-modal landslide segmentation using U-Net architectures, declarative YAML layer parsing, dynamic $1\times1$ input projection, physical directional aspect transformations, and combined BCE + Dice loss.
 
 ---
 
@@ -19,26 +19,41 @@ landslide/
 │   ├── hyp.scratch.yaml         # Training hyperparameters & loss weights
 │   ├── base.py                  # BaseMultiModalDataset abstract interface & registry
 │   ├── adapters.py              # FolderStructureAdapter & CustomDatasetWrapper
-│   ├── transforms.py            # Synchronized multi-modal spatial augmentations
+│   ├── transforms.py            # Synchronized spatial augmentations & Aspect vector rotation
+│   ├── spatial.py               # Geospatial leakage audit & regional corridor partitioning
 │   └── datasets.py              # Multi-modal dataset factory & loader
 ├── models/
 │   ├── architectures/
-│   │   ├── unet.yaml            # Standard U-Net architecture YAML
-│   │   └── unet_lite.yaml       # Lightweight U-Net architecture YAML
+│   │   ├── unet.yaml            # Standard U-Net with 1x1 Conv input projection
+│   │   ├── unet_lite.yaml       # Lightweight U-Net with 1x1 Conv input projection
+│   │   ├── unet_noproj.yaml     # Direct U-Net without projection (3-channel input)
+│   │   └── unet_noproj_lite.yaml# Lightweight Direct U-Net without projection
 │   ├── common.py                # Layer modules: Conv, DoubleConv, Down, Up, OutConv, Concat
 │   └── model_parser.py          # Declarative YAML architecture parser & Model class
+├── configs/                     # Pre-configured YAML experiment files
+│   ├── train.yaml               # Standard training (RGB + DTM concatenation)
+│   ├── train_rgb_noproj.yaml    # Pure 3-channel RGB direct baseline
+│   ├── train_rgb_add_dtm.yaml   # RGB + DTM normalized additive fusion (3 channels)
+│   ├── train_multimodal.yaml    # 7-channel multi-modal training
+│   ├── train_finetune_carvana.yaml # Pretrained Carvana U-Net transfer learning
+│   ├── test.yaml                # Standalone validation evaluation
+│   ├── predict.yaml             # Multi-modal inference configuration
+│   └── evolve.yaml              # Hyperparameter evolution configuration
 ├── utils/
 │   ├── loss.py                  # Combined BCEWithLogitsLoss + Soft Dice Loss
-│   ├── metrics.py               # Segmentation metrics (mIoU, Dice/F1, Precision, Recall, Accuracy)
+│   ├── metrics.py               # Comprehensive metric suite (Fg/Bg IoU, 2-Class mIoU, Micro/Macro Dice)
 │   ├── plots.py                 # Loss curves and multi-panel prediction overlays
-│   ├── torch_utils.py           # Device management, seeding, and early stopping
+│   ├── torch_utils.py           # Device management, seeding, EarlyStopping, and pretrained loader
 │   └── general.py               # Logging, path incrementation, and CLI styling
 ├── train.py                     # Training loop with live diagnostics & checkpointing
 ├── test.py                      # Standalone evaluation script on validation/test sets
 ├── predict.py                   # Multi-modal inference & visualization overlay generator
-├── smoke_test.py                # Automated 6-stage repository verification suite
+├── evolve.py                    # Genetic hyperparameter evolution engine
+├── run_experiments.ps1          # Automated sequential PowerShell benchmark runner
+├── smoke_test.py                # Automated 15-stage comprehensive verification suite
 ├── environment.yml              # Conda environment definition for RTX 2060 Super (CUDA 12.1)
 ├── requirements.txt             # Pip environment dependencies
+├── CONFIGS.md                   # Complete configuration reference & CLI overriding guide
 └── CONTEXT.md                   # Domain vocabulary and glossary
 ```
 
@@ -46,84 +61,65 @@ landslide/
 
 ## 🛰️ Multi-Modal Input Options
 
-The framework supports dynamic concatenation of optical RGB imagery and continuous topographic rasters:
+The framework supports dynamic concatenation (`concat`) of optical RGB imagery and continuous topographic rasters, as well as normalized element-wise addition (`add`) for scalar topography:
 
-| Preset Name | Modalities Included | Channels | Description |
-| :--- | :--- | :---: | :--- |
-| `rgb_only` | `['IMAGE']` | 3 | Standard optical RGB imagery |
-| `topo_only` | `['DTM_NORM', 'SLOPE', 'ASPECT']` | 4 | Topography only (1 DTM + 1 Slope + 2 Aspect sin/cos) |
-| `rgb_dtm` | `['IMAGE', 'DTM_NORM']` | 4 | RGB + Normalized DTM elevation |
-| `rgb_slope` | `['IMAGE', 'SLOPE']` | 4 | RGB + Slope steepness |
-| `rgb_aspect` | `['IMAGE', 'ASPECT']` | 5 | RGB + Aspect orientation ($\sin\theta, \cos\theta$) |
-| `all` | `['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']` | 7 | Full multi-modal feature set |
+| Preset Name | Modalities Included | Channels | Fusion Mode | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `rgb_only` | `['IMAGE']` | 3 | Concat / Direct | Standard optical RGB imagery |
+| `topo_only` | `['DTM_NORM', 'SLOPE', 'ASPECT']` | 4 | Concat | Topography only (1 DTM + 1 Slope + 2 Aspect sin/cos) |
+| `rgb_dtm` | `['IMAGE', 'DTM_NORM']` | 4 / 3 | Concat / Add | RGB + Normalized DTM elevation |
+| `rgb_slope` | `['IMAGE', 'SLOPE']` | 4 / 3 | Concat / Add | RGB + Slope steepness |
+| `rgb_aspect` | `['IMAGE', 'ASPECT']` | 5 | Concat | RGB + Aspect orientation ($\sin\theta, \cos\theta$) |
+| `all` | `['IMAGE', 'DTM_NORM', 'SLOPE', 'ASPECT']` | 7 | Concat | Full multi-modal feature set |
+| `rgb_add_dtm` | `['IMAGE', 'DTM_NORM']` | 3 | Add | $(\text{RGB} + \text{DTM})/2 \in [0, 1]$ addition |
+| `rgb_add_slope` | `['IMAGE', 'SLOPE']` | 3 | Add | $(\text{RGB} + \text{SLOPE})/2 \in [0, 1]$ addition |
 
 Custom channel combinations can be passed directly via `--inputs`, e.g., `--inputs IMAGE DTM_NORM SLOPE`.
 
 ---
 
-## ⚙️ Data Preprocessing & Normalization
+## ⚙️ Data Preprocessing & Topographic Normalization
 
-1. **NaN Handling**: Edge NaNs are replaced immediately upon loading via `np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)`.
-2. **Optical RGB (`IMAGE`)**: Scaled to $[0.0, 1.0]$ via $x / 255.0$.
-3. **Normalized DTM (`DTM_NORM`)**: 16-bit unsigned integer scaled to $[0.0, 1.0]$ via $x / 65535.0$.
-4. **Slope (`SLOPE`)**: Degrees $[0, 90]^\circ$ scaled to $[0.0, 1.0]$ via $\text{slope} / 90.0$.
-5. **Aspect (`ASPECT`)**: Degrees $[0, 360]^\circ$ decomposed into continuous components $\sin(\theta)$ and $\cos(\theta)$ in $[-1.0, 1.0]$ (2 channels).
-6. **Ground Truth (`LABEL`)**: Binary mask mapped to $\{0.0, 1.0\}$.
-
----
-
-## 🔌 Integrating New External Datasets
-
-Any new dataset can be integrated by adhering to the `BaseMultiModalDataset` interface (`data/base.py`):
-
-### 1. Expected Interface Contract
-Every sample returned by `__getitem__(idx)` must be a 3-element tuple:
-$$\text{sample} = (\text{tensor}, \text{mask}, \text{sample\_id})$$
-- `tensor`: `torch.FloatTensor` of shape `(C_in, H, W)` with normalized feature values.
-- `mask`: `torch.FloatTensor` of shape `(1, H, W)` with binary ground truth $\{0.0, 1.0\}$.
-- `sample_id`: `str` unique identifier.
-
-### 2. Integration Methods
-- **Zero-Code Folder Datasets**: Create a dataset YAML referencing your new folder (e.g. `data/my_dataset.yaml` with `dataset_type: folder`).
-- **Custom PyTorch Classes**: Register custom classes with `@register_dataset("my_custom_name")` in `data/adapters.py`.
+1. **Aspect NoData / Flat Zero-Vector Encoding**:
+   - In GIS DEM processing, undefined/flat terrain or NoData pixels (NaN, Inf, $-9999$, $-1$) are strictly encoded as **zero-magnitude vectors** $(0.0, 0.0)$, rather than mapping $\theta=0^\circ$ to True North $(0.0, 1.0)$.
+   - Prevents artificial directional bias across flat plains and unmeasured boundaries.
+2. **Aspect Directional Consistency Under Geometric Augmentations**:
+   - Aspect is represented as continuous directional vector components $(\sin\theta, \cos\theta)$ where $\theta$ is azimuth clockwise from North.
+   - Under geometric augmentations (`fliplr`, `flipud`, `rot90`), directional components undergo exact coordinate transformations:
+     - **Horizontal Flip (`fliplr`, $x \to -x$)**: East-West component inverted ($\sin\theta \to -\sin\theta$), North-South ($\cos\theta$) preserved.
+     - **Vertical Flip (`flipud`, $y \to -y$)**: North-South component inverted ($\cos\theta \to -\cos\theta$), East-West ($\sin\theta$) preserved.
+     - **90° Rotations (`rot90`, $k \in \{1, 2, 3\}$)**: Continuous azimuth vector rotated by $-90^\circ, -180^\circ, +90^\circ$.
+3. **Active `img_size` Spatial Dimension Enforcement**:
+   - Continuous multi-channel feature tensors are resized to exact target dimensions $(C_\text{in}, \text{img\_size}, \text{img\_size})$ using **bilinear interpolation**.
+   - Binary segmentation masks are resized using **nearest-neighbor interpolation**, guaranteeing discrete $\{0.0, 1.0\}$ ground-truth labels.
+4. **Optical RGB (`IMAGE`)**: Scaled to $[0.0, 1.0]$ via $x / 255.0$.
+5. **Normalized DTM (`DTM_NORM`)**: 16-bit unsigned integer scaled to $[0.0, 1.0]$ via $x / 65535.0$.
+6. **Slope (`SLOPE`)**: Degrees $[0, 90]^\circ$ scaled to $[0.0, 1.0]$ via $\text{slope} / 90.0$.
+7. **Ground Truth (`LABEL`)**: Binary mask mapped to $\{0.0, 1.0\}$.
 
 ---
 
-## 🧱 Architecture & Model Parser
+## 🗺️ Geospatial Leakage Prevention & Regional Corridor Partitioning
 
-Neural architectures are declared in YAML files using `[from, number, module, args]` blocks following the SSFusion paradigm. 
+In geospatial semantic segmentation, random patch splitting causes severe **spatial data leakage** because adjacent spatial tiles share nearly identical lithology, soil moisture, and slope.
 
-The framework provides two primary architectural choices:
-1. **Direct U-Net Without Projection ([`models/architectures/unet_noproj.yaml`](file:///D:/landslide/models/architectures/unet_noproj.yaml))**:
-   Starts directly with Stage 1 `DoubleConv` (no $1\times1$ Conv projection layer). Designed for **pure 3-channel RGB** input or **element-wise additive fusion** (e.g. RGB + DTM addition):
-   ```yaml
-   backbone:
-     [[-1, 1, DoubleConv, [64]],        # 0 - Encoder Stage 1 (3 -> 64)
-      [-1, 1, Down, [128]],             # 1 - Encoder Stage 2 (64 -> 128)
-      [-1, 1, Down, [256]],             # 2 - Encoder Stage 3 (128 -> 256)
-      [-1, 1, Down, [512]],             # 3 - Encoder Stage 4 (256 -> 512)
-      [-1, 1, Down, [1024]],            # 4 - Bottleneck (512 -> 1024)
-     ]
-   ```
-
-2. **Standard U-Net with Input Projection ([`models/architectures/unet.yaml`](file:///D:/landslide/models/architectures/unet.yaml))**:
-   Uses a $1\times1$ `Conv` projection block (Layer 0) to project arbitrary concatenated multi-modal tensors ($C_{\text{in}} \in [1, 7]$) down to 3 channels prior to the encoder:
-   ```yaml
-   backbone:
-     [[-1, 1, Conv, [3, 1, 1]],         # 0 - (C_in -> 3 via 1x1 Conv)
-      [-1, 1, DoubleConv, [64]],        # 1 - Encoder Stage 1 (3 -> 64)
-      ...
-     ]
-   ```
+- **Regional Corridor Splitting**: Entire linear survey sections (e.g. corridor `Chainage_17` for validation; `Chainages_1, 2, 18, 19` for training) are isolated to ensure true out-of-region generalization.
+- **Audit Tool ([`data/spatial.py`](file:///D:/landslide/data/spatial.py))**:
+  ```bash
+  python -m data.spatial --data data/landslide.yaml --audit
+  ```
+  Analyzes sample prefixes and geographic bounds, reporting shared regions and minimum tile distance violations across splits.
 
 ---
 
 ## 🔀 Multi-Modal Fusion Modes
 
 The framework supports two distinct fusion mechanisms selectable via `--fusion`:
-- **Concatenation (`--fusion concat`)**: Modalities are stacked along the channel axis (e.g., RGB (3ch) + DTM (1ch) = 4 input channels).
-- **Element-wise Addition (`--fusion add`)**: Normalized auxiliary topographic rasters (e.g., normalized DTM $\in [0, 1]$) are added directly into all 3 normalized optical RGB channels ($x_{\text{RGB}} \in [0, 1]$), resulting in an exact **3-channel input tensor**:
-  $$x_{\text{fused}} = x_{\text{RGB}} + x_{\text{DTM\_NORM}}$$
+- **Concatenation (`--fusion concat`) [Recommended]**: Modalities are stacked along the channel axis (e.g., RGB (3ch) + DTM (1ch) = 4 input channels; RGB + Topo = 7 input channels). Preserves individual modality identity and cross-channel gradients.
+- **Normalized Element-wise Addition (`--fusion add`)**: Single-channel scalar topographic rasters (e.g., normalized DTM $\in [0, 1]$) are added element-wise into the 3 optical RGB channels and renormalized to prevent distribution shift:
+  $$\text{fused} = \frac{\text{RGB} + \sum \text{Aux}}{1 + N_{\text{aux}}} \in [0.0, 1.0]$$
+  > [!NOTE]
+  > Additive fusion is strictly restricted to single-channel scalar rasters (such as DTM or SLOPE). Multi-channel directional modalities (like 2-channel ASPECT) must use `concat`.
 
 ---
 
@@ -133,13 +129,15 @@ The training objective combines pixel-level classification (Binary Cross Entropy
 
 $$\mathcal{L} = \alpha \cdot \mathcal{L}_{\text{BCEWithLogits}} + \beta \cdot \mathcal{L}_{\text{Dice}}$$
 
-Loss weights $\alpha, \beta$ are configurable in `data/hyp.scratch.yaml`.
+Loss weights $\alpha, \beta$ and `pos_weight` are configurable in `data/hyp.scratch.yaml` and serialized inside checkpoint bundles.
 
-Evaluation tracks:
-- **Mean IoU (Jaccard Index)**
-- **Dice Coefficient (F1-Score)**
-- **Precision & Recall**
-- **Pixel Accuracy**
+### Metric Suite
+- **Foreground IoU (`fg_iou`)**: Landslide Jaccard Index $\frac{\text{TP}}{\text{TP} + \text{FP} + \text{FN}}$.
+- **Background IoU (`bg_iou`)**: Non-landslide Jaccard Index $\frac{\text{TN}}{\text{TN} + \text{FP} + \text{FN}}$.
+- **True Two-Class Mean IoU (`miou`)**: Macro average $\frac{\text{fg\_iou} + \text{bg\_iou}}{2}$.
+- **Global / Micro Dice (`fg_dice`)**: Dataset-level pixel aggregation $\frac{2\text{TP}}{2\text{TP} + \text{FP} + \text{FN}}$.
+- **Per-Image / Macro Dice (`fg_dice_macro`)**: Arithmetic mean of per-image Dice scores (matches `BCEDiceLoss` aggregation).
+- **Precision, Recall, & Pixel Accuracy**: Comprehensive binary classification diagnostics.
 
 ---
 

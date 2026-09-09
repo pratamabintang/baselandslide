@@ -10,30 +10,39 @@ import torch
 def plot_results(csv_path, save_dir=''):
     """
     Plot training metrics and loss curves from results.csv.
+    Supports both legacy 8-column and extended multi-metric CSV formats.
     """
+    import csv
     csv_path = Path(csv_path)
     if not csv_path.exists():
         return
 
     try:
-        data = np.loadtxt(csv_path, delimiter=',', skiprows=1)
-        if data.ndim == 1:
-            data = data[None, :]
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            return
 
-        epochs = data[:, 0]
-        train_loss = data[:, 1]
-        val_loss = data[:, 2]
-        val_iou = data[:, 3]
-        val_dice = data[:, 4]
-        val_prec = data[:, 5]
-        val_rec = data[:, 6]
+        headers = list(rows[0].keys())
+        data_dict = {h: np.array([float(r[h]) for r in rows]) for h in headers}
+
+        epochs = data_dict.get('epoch', np.arange(1, len(rows) + 1))
+        train_loss = data_dict.get('train_loss', np.zeros(len(rows)))
+        val_loss = data_dict.get('val_loss', np.zeros(len(rows)))
+        val_fg_iou = data_dict.get('val_fg_iou', data_dict.get('val_iou', np.zeros(len(rows))))
+        val_miou = data_dict.get('val_miou', None)
+        val_fg_dice = data_dict.get('val_fg_dice', data_dict.get('val_dice', np.zeros(len(rows))))
+        val_dice_macro = data_dict.get('val_fg_dice_macro', None)
+        val_prec = data_dict.get('val_precision', np.zeros(len(rows)))
+        val_rec = data_dict.get('val_recall', np.zeros(len(rows)))
 
         fig, axes = plt.subplots(2, 2, figsize=(13, 10))
 
         # Best metrics indices
-        best_dice_idx = int(np.argmax(val_dice))
+        best_dice_idx = int(np.argmax(val_fg_dice))
         best_loss_idx = int(np.argmin(val_loss))
-        best_iou_idx = int(np.argmax(val_iou))
+        best_iou_idx = int(np.argmax(val_fg_iou))
         best_dice_epoch = int(epochs[best_dice_idx])
 
         # 1. Loss Curve
@@ -47,20 +56,24 @@ def plot_results(csv_path, save_dir=''):
         axes[0, 0].grid(True, linestyle=':', alpha=0.6)
         axes[0, 0].legend(loc='best')
 
-        # 2. IoU Curve
-        axes[0, 1].plot(epochs, val_iou * 100, 'g-', label='Val mIoU', alpha=0.85)
-        axes[0, 1].scatter(epochs[best_iou_idx], val_iou[best_iou_idx] * 100, color='forestgreen', s=90, zorder=5, edgecolors='black',
-                           label=f'★ Best mIoU: {val_iou[best_iou_idx]*100:.2f}% (Ep {int(epochs[best_iou_idx])})')
-        axes[0, 1].set_title('Mean IoU (Jaccard Index)', fontsize=12, fontweight='bold')
+        # 2. IoU Curves (Foreground Landslide IoU & 2-Class mIoU)
+        axes[0, 1].plot(epochs, val_fg_iou * 100, 'g-', label='Val Fg IoU (Landslide)', alpha=0.85)
+        if val_miou is not None:
+            axes[0, 1].plot(epochs, val_miou * 100, 'teal', linestyle=':', label='Val 2-Class mIoU', alpha=0.85)
+        axes[0, 1].scatter(epochs[best_iou_idx], val_fg_iou[best_iou_idx] * 100, color='forestgreen', s=90, zorder=5, edgecolors='black',
+                           label=f'★ Best Fg IoU: {val_fg_iou[best_iou_idx]*100:.2f}% (Ep {int(epochs[best_iou_idx])})')
+        axes[0, 1].set_title('Intersection over Union (IoU)', fontsize=12, fontweight='bold')
         axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('mIoU (%)')
+        axes[0, 1].set_ylabel('IoU (%)')
         axes[0, 1].grid(True, linestyle=':', alpha=0.6)
         axes[0, 1].legend(loc='best')
 
-        # 3. Dice / F1 Score
-        axes[1, 0].plot(epochs, val_dice * 100, 'm-', label='Val Dice / F1', alpha=0.85)
-        axes[1, 0].scatter(epochs[best_dice_idx], val_dice[best_dice_idx] * 100, color='gold', marker='*', s=220, zorder=5, edgecolors='black',
-                           label=f'★ Best Dice: {val_dice[best_dice_idx]*100:.2f}% (Ep {best_dice_epoch})')
+        # 3. Dice / F1 Score (Micro vs Macro)
+        axes[1, 0].plot(epochs, val_fg_dice * 100, 'm-', label='Val Fg Dice (Micro)', alpha=0.85)
+        if val_dice_macro is not None:
+            axes[1, 0].plot(epochs, val_dice_macro * 100, 'darkviolet', linestyle='--', label='Val Fg Dice (Macro Per-Tile)', alpha=0.7)
+        axes[1, 0].scatter(epochs[best_dice_idx], val_fg_dice[best_dice_idx] * 100, color='gold', marker='*', s=220, zorder=5, edgecolors='black',
+                           label=f'★ Best Micro Dice: {val_fg_dice[best_dice_idx]*100:.2f}% (Ep {best_dice_epoch})')
         axes[1, 0].set_title('Dice Coefficient (F1-Score)', fontsize=12, fontweight='bold')
         axes[1, 0].set_xlabel('Epoch')
         axes[1, 0].set_ylabel('Dice (%)')

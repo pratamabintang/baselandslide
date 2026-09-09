@@ -58,17 +58,20 @@ def parse_model(d, ch):
         if m in [DoubleConv, Down, Conv]:
             c1 = ch[f]
             c2 = args[0]
+            if not (i == 0 and m is Conv and c2 <= 4):  # preserve input projection if present
+                c2 = max(round(c2 * gw / 8) * 8, 8) if gw != 1.0 else c2
             args = [c1, c2, *args[1:]]
 
         elif m is Up:
             # f is [lower_idx, skip_idx]
             c1_lower = ch[f[0]]
             c2 = args[0]
+            c2 = max(round(c2 * gw / 8) * 8, 8) if gw != 1.0 else c2
             args = [c1_lower, c2, *args[1:]]
 
         elif m is OutConv:
             c1 = ch[f]
-            c2 = args[0] if len(args) > 0 else nc
+            c2 = nc  # Dynamically driven by top-level nc configuration
             args = [c1, c2, *args[1:]]
 
         elif m is Concat:
@@ -77,6 +80,8 @@ def parse_model(d, ch):
         else:
             c1 = ch[f]
             c2 = args[0] if len(args) > 0 else c1
+            if len(args) > 0 and c2 != nc:
+                c2 = max(round(c2 * gw / 8) * 8, 8) if gw != 1.0 else c2
             args = [c1, c2, *args[1:]]
 
         # Construct layer instance

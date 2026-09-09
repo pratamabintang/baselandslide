@@ -65,8 +65,10 @@ class CEDiceLoss(nn.Module):
 
     def __init__(self, alpha=1.0, beta=1.0, smooth=1.0, weight=None, pos_weight=None):
         super().__init__()
-        self.alpha = alpha
-        self.beta = beta
+        self.alpha = float(alpha)
+        self.beta = float(beta)
+        self.pos_weight = float(pos_weight) if pos_weight is not None else 1.0
+        self.smooth = float(smooth)
         if weight is None and pos_weight is not None and float(pos_weight) != 1.0:
             weight = torch.tensor([1.0, float(pos_weight)], dtype=torch.float32)
         elif weight is not None and not isinstance(weight, torch.Tensor):

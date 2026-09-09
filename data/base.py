@@ -105,3 +105,5 @@ class BaseMultiModalDataset(Dataset, ABC):
             raise ValueError(f"Sample {sample_id}: mask must have shape (1, H, W), got shape {mask.shape}")
         if tensor.shape[1:] != mask.shape[1:]:
             raise ValueError(f"Sample {sample_id}: spatial dimensions of tensor {tensor.shape[1:]} and mask {mask.shape[1:]} do not match")
+        if (tensor.shape[1], tensor.shape[2]) != self.img_size:
+            raise ValueError(f"Sample {sample_id}: spatial dimensions {tensor.shape[1:]} do not match dataset expected img_size {self.img_size}")

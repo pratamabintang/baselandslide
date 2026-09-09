@@ -10,7 +10,7 @@ from data.datasets import create_dataloader, resolve_inputs, get_channel_count
 from utils.loss import BCEDiceLoss
 from utils.metrics import SegmentationMetrics
 from utils.plots import plot_predictions
-from utils.torch_utils import select_device
+from utils.torch_utils import select_device, torch_load
 from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 
 logger = set_logging(__name__)
@@ -93,26 +93,53 @@ def run_test(opt):
     with open(data_yaml, 'r') as f:
         data_dict = yaml.safe_load(f)
 
-    # Resolve inputs and in_channels
+    # Load hyp YAML if provided
+    hyp_dict = {}
+    if opt.hyp and Path(opt.hyp).exists():
+        with open(opt.hyp, 'r') as f:
+            hyp_dict = yaml.safe_load(f)
+
+    # Resolve inputs, in_channels, and model architecture
     fusion = getattr(opt, 'fusion', 'concat')
+    loss_cfg = {}
+
     if opt.weights and Path(opt.weights).exists():
-        ckpt = torch.load(opt.weights, map_location=device)
+        ckpt = torch_load(opt.weights, map_location=device)
         model_cfg = ckpt.get('cfg', opt.cfg)
         fusion = ckpt.get('fusion', fusion)
         inputs = ckpt.get('inputs', resolve_inputs(opt.inputs, data_dict.get('presets', {})))
         in_channels = ckpt.get('in_channels', get_channel_count(inputs, data_dict.get('presets', {}), fusion=fusion))
-        model = Model(cfg=model_cfg, ch=in_channels, nc=ckpt.get('nc', data_dict.get('nc', 1))).to(device)
+        nc = ckpt.get('nc', data_dict.get('nc', 1))
+        model = Model(cfg=model_cfg, ch=in_channels, nc=nc).to(device)
         model.load_state_dict(ckpt['model'])
         ep_info = f" (Epoch {ckpt['epoch']})" if isinstance(ckpt, dict) and 'epoch' in ckpt else ""
         logger.info(f"Loaded weights from {opt.weights}{ep_info}")
+
+        # Extract checkpoint loss configuration if available
+        loss_cfg = ckpt.get('loss_cfg', {})
+        if not loss_cfg and 'hyp' in ckpt:
+            h = ckpt['hyp']
+            loss_cfg = {
+                'alpha': h.get('bce_weight', 1.0),
+                'beta': h.get('dice_weight', 1.0),
+                'pos_weight': h.get('pos_weight', 1.0)
+            }
     else:
         inputs = resolve_inputs(opt.inputs, data_dict.get('presets', {}))
         in_channels = get_channel_count(inputs, data_dict.get('presets', {}), fusion=fusion)
+        nc = data_dict.get('nc', 1)
         logger.info(f"Initializing model from config: {opt.cfg} (no pretrained weights)")
-        model = Model(cfg=opt.cfg, ch=in_channels, nc=data_dict.get('nc', 1)).to(device)
+        model = Model(cfg=opt.cfg, ch=in_channels, nc=nc).to(device)
+
+    # Determine loss parameters (Checkpoint loss_cfg -> CLI/hyp -> Defaults)
+    alpha = float(hyp_dict.get('bce_weight', loss_cfg.get('alpha', 0.5 if opt.hyp else loss_cfg.get('alpha', 1.0))))
+    beta = float(hyp_dict.get('dice_weight', loss_cfg.get('beta', 1.0)))
+    pos_weight = float(hyp_dict.get('pos_weight', loss_cfg.get('pos_weight', 4.0 if opt.hyp else loss_cfg.get('pos_weight', 1.0))))
+    smooth = float(loss_cfg.get('smooth', 1.0))
 
     # Criterion
-    criterion = BCEDiceLoss(alpha=1.0, beta=1.0).to(device)
+    criterion = BCEDiceLoss(alpha=alpha, beta=beta, pos_weight=pos_weight, smooth=smooth).to(device)
+    logger.info(f"Criterion configured: Total Loss = {alpha} * CrossEntropy (pos_weight={pos_weight}) + {beta} * Dice (smooth={smooth})")
 
     # DataLoader
     dataloader, dataset = create_dataloader(
@@ -142,16 +169,29 @@ def run_test(opt):
     )
 
     # Print summary table
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 80)
     print(colorstr('bold', f"EVALUATION RESULTS [{opt.split.upper()}] (Threshold = {opt.conf_thres})"))
-    print("=" * 70)
-    print(f"  Total Loss     : {scores['loss']:.4f} (BCE: {scores['loss_bce']:.4f}, Dice: {scores['loss_dice']:.4f})")
-    print(f"  Mean IoU       : {scores['iou'] * 100:.2f}%")
-    print(f"  Dice (F1-Score): {scores['dice'] * 100:.2f}%")
-    print(f"  Precision      : {scores['precision'] * 100:.2f}%")
-    print(f"  Recall         : {scores['recall'] * 100:.2f}%")
-    print(f"  Pixel Accuracy : {scores['accuracy'] * 100:.2f}%")
-    print("=" * 70 + "\n")
+    print("=" * 80)
+    print(f"  Loss Formulation : Total Loss = {alpha} * CrossEntropy (pos_weight={pos_weight}) + {beta} * Dice")
+    print(f"  Total Loss       : {scores['loss']:.4f} (CE: {scores['loss_bce']:.4f}, Dice Loss: {scores['loss_dice']:.4f})")
+    print("-" * 80)
+    print(colorstr('bold', 'cyan', "  [Intersection-over-Union (IoU)]"))
+    print(f"    • Foreground IoU (Landslide)  : {scores['fg_iou'] * 100:6.2f}%  (Micro/Global TP/(TP+FP+FN))")
+    print(f"    • Per-Image Fg IoU (Macro)    : {scores['fg_iou_macro'] * 100:6.2f}%  (Mean of per-tile IoU scores)")
+    print(f"    • Background IoU              : {scores['bg_iou'] * 100:6.2f}%  (TN/(TN+FP+FN))")
+    print(colorstr('bold', 'bright_yellow', f"    • Two-Class Mean IoU (mIoU)   : {scores['miou'] * 100:6.2f}%  (Average of Fg & Bg IoU)"))
+    print("-" * 80)
+    print(colorstr('bold', 'cyan', "  [Dice Coefficient / F1-Score]"))
+    print(f"    • Foreground Dice (Micro F1)  : {scores['fg_dice'] * 100:6.2f}%  (Global aggregate across dataset)")
+    print(f"    • Foreground Dice (Macro)     : {scores['fg_dice_macro'] * 100:6.2f}%  (Per-tile mean, equal tile weight)")
+    print(f"    • Background Dice             : {scores['bg_dice'] * 100:6.2f}%")
+    print(colorstr('bold', 'bright_yellow', f"    • Two-Class Mean Dice (mDice) : {scores['mdice'] * 100:6.2f}%  (Average of Fg & Bg Dice)"))
+    print("-" * 80)
+    print(colorstr('bold', 'cyan', "  [Classification & Pixel Metrics]"))
+    print(f"    • Foreground Precision        : {scores['precision'] * 100:6.2f}%")
+    print(f"    • Foreground Recall           : {scores['recall'] * 100:6.2f}%")
+    print(f"    • Overall Pixel Accuracy      : {scores['accuracy'] * 100:6.2f}%")
+    print("=" * 80 + "\n")
 
     return scores
 
@@ -162,6 +202,7 @@ def parse_opt():
     parser.add_argument('--weights', type=str, default='', help='model weights path (.pt)')
     parser.add_argument('--cfg', type=str, default='models/architectures/unet.yaml', help='model.yaml architecture path')
     parser.add_argument('--data', type=str, default='data/landslide.yaml', help='dataset.yaml path')
+    parser.add_argument('--hyp', type=str, default='', help='hyperparameters yaml path (e.g. data/hyp.scratch.yaml)')
     parser.add_argument('--inputs', type=str, default='rgb_only',
                         help='input option preset (rgb_only, topo_only, rgb_dtm, rgb_slope, rgb_aspect, all) or list')
     parser.add_argument('--fusion', type=str, default='concat', choices=['concat', 'add'],
@@ -177,7 +218,6 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--plots', action='store_true', default=True, help='save prediction visual plots')
     return parse_options_with_config(parser)
-
 
 
 if __name__ == '__main__':

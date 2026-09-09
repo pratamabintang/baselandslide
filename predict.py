@@ -16,13 +16,13 @@ import matplotlib.patches as mpatches
 
 from models.model_parser import Model
 from data.datasets import resolve_inputs, get_channel_count, MODALITY_EXTENSIONS
-from utils.torch_utils import select_device
+from utils.torch_utils import select_device, torch_load
 from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 
 logger = set_logging(__name__)
 
 
-def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusion='concat'):
+def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusion='concat', img_size=None):
     """
     Load and preprocess multi-modal rasters for a single sample stem,
     and optionally load ground truth label mask if present.
@@ -33,6 +33,7 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusi
         inputs (list): List of active modality names (e.g. ['IMAGE', 'DTM_NORM'])
         label_folder (str): Name of ground truth mask folder
         fusion (str): Modality fusion mode ('concat' or 'add')
+        img_size (int, tuple, or None): Optional target spatial resolution (H, W)
 
     Returns:
         tensor (torch.Tensor): Model input tensor of shape (1, C_in, H, W)
@@ -88,10 +89,13 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusi
         elif mod == 'ASPECT':
             img = Image.open(mod_path)
             arr = np.array(img, dtype=np.float32)
-            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-            rad = arr * (np.pi / 180.0)
+            invalid_mask = np.isnan(arr) | np.isinf(arr) | (arr < 0) | (arr > 360.0)
+            valid_arr = np.where(invalid_mask, 0.0, arr)
+            rad = valid_arr * (np.pi / 180.0)
             sin_aspect = np.sin(rad)
             cos_aspect = np.cos(rad)
+            sin_aspect[invalid_mask] = 0.0
+            cos_aspect[invalid_mask] = 0.0
             mod_arrays.append(np.stack([sin_aspect, cos_aspect], axis=-1))
 
         else:
@@ -106,19 +110,27 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusi
         if 'IMAGE' in inputs:
             rgb_idx = inputs.index('IMAGE')
             fused = mod_arrays[rgb_idx].copy()
+            aux_count = 0
             for i, mod in enumerate(inputs):
                 if i != rgb_idx:
                     aux = mod_arrays[i]
-                    if fused.ndim == 3 and fused.shape[-1] == 3 and aux.ndim == 3 and aux.shape[-1] == 1:
-                        fused = fused + aux
-                    else:
-                        fused = fused + aux
-            combined = fused
+                    if aux.ndim == 3 and aux.shape[-1] != 1:
+                        raise ValueError(
+                            f"Additive fusion ('add') cannot add multi-channel modality '{mod}' (shape {aux.shape}) "
+                            f"to RGB base. Only 1-channel scalar modalities (e.g. DTM_NORM, SLOPE) can be added."
+                        )
+                    fused = fused + aux
+                    aux_count += 1
+            combined = fused / (1.0 + aux_count)
         else:
             fused = mod_arrays[0].copy()
             for aux in mod_arrays[1:]:
+                if aux.ndim == 3 and aux.shape[-1] != 1:
+                    raise ValueError(
+                        f"Additive fusion ('add') cannot add multi-channel modality (shape {aux.shape}) to base."
+                    )
                 fused = fused + aux
-            combined = fused
+            combined = fused / float(len(mod_arrays))
     else:
         combined = np.concatenate(mod_arrays, axis=-1)  # (H, W, C_in)
 
@@ -138,19 +150,31 @@ def load_single_sample(source_stem, base_dir, inputs, label_folder='LABEL', fusi
             gt_mask = (arr_gt > 0).astype(np.float32)
             break
 
+    # 3. Optional spatial dimension enforcement
+    if img_size is not None:
+        target_h, target_w = (img_size, img_size) if isinstance(img_size, int) else img_size
+        if tensor.shape[2] != target_h or tensor.shape[3] != target_w:
+            tensor = torch.nn.functional.interpolate(tensor, size=(target_h, target_w), mode='bilinear', align_corners=False)
+            if gt_mask is not None:
+                gt_t = torch.from_numpy(gt_mask).unsqueeze(0).unsqueeze(0).float()
+                gt_mask = torch.nn.functional.interpolate(gt_t, size=(target_h, target_w), mode='nearest')[0, 0].numpy()
+            if rgb_display is not None:
+                rgb_t = torch.from_numpy(rgb_display.transpose(2, 0, 1)).unsqueeze(0).float()
+                rgb_display = torch.nn.functional.interpolate(rgb_t, size=(target_h, target_w), mode='bilinear', align_corners=False)[0].numpy().transpose(1, 2, 0)
+
     return tensor, rgb_display, gt_mask
 
 
 def compute_sample_metrics(pred_mask, gt_mask):
     """
-    Compute binary segmentation metrics (IoU, Dice, Precision, Recall) for a single sample.
+    Compute binary and two-class segmentation metrics for a single sample.
 
     Args:
         pred_mask (np.ndarray): Binary prediction {0, 1}
         gt_mask (np.ndarray): Binary ground truth {0, 1}
 
     Returns:
-        dict: {'iou': float, 'dice': float, 'precision': float, 'recall': float, 'tp': int, 'fp': int, 'fn': int}
+        dict: fg_iou, bg_iou, miou, fg_dice, bg_dice, mdice, precision, recall, tp, fp, fn, tn
     """
     pred_b = (pred_mask > 0).astype(bool)
     gt_b = (gt_mask > 0).astype(bool)
@@ -160,13 +184,21 @@ def compute_sample_metrics(pred_mask, gt_mask):
     fn = np.logical_and(np.logical_not(pred_b), gt_b).sum()
     tn = np.logical_and(np.logical_not(pred_b), np.logical_not(gt_b)).sum()
 
-    # IoU (Jaccard)
-    intersection = tp
-    union = tp + fp + fn
-    iou = 1.0 if union == 0 else float(intersection) / float(union)
+    # Foreground IoU & Dice (Landslide)
+    union_fg = tp + fp + fn
+    fg_iou = 1.0 if union_fg == 0 else float(tp) / float(union_fg)
+    card_fg = 2 * tp + fp + fn
+    fg_dice = 1.0 if card_fg == 0 else float(2 * tp) / float(card_fg)
 
-    # Dice (F1)
-    dice = 1.0 if (2 * tp + fp + fn) == 0 else float(2 * tp) / float(2 * tp + fp + fn)
+    # Background IoU & Dice
+    union_bg = tn + fp + fn
+    bg_iou = 1.0 if union_bg == 0 else float(tn) / float(union_bg)
+    card_bg = 2 * tn + fp + fn
+    bg_dice = 1.0 if card_bg == 0 else float(2 * tn) / float(card_bg)
+
+    # Two-Class Means
+    miou = (fg_iou + bg_iou) / 2.0
+    mdice = (fg_dice + bg_dice) / 2.0
 
     # Precision & Recall
     if tp + fp == 0:
@@ -175,15 +207,21 @@ def compute_sample_metrics(pred_mask, gt_mask):
         precision = float(tp) / float(tp + fp)
 
     if tp + fn == 0:
-        recall = 1.0
+        recall = 1.0 if (tp + fp == 0) else 0.0
     else:
         recall = float(tp) / float(tp + fn)
 
     return {
-        'iou': iou,
-        'dice': dice,
-        'precision': precision,
-        'recall': recall,
+        'iou': float(fg_iou),
+        'fg_iou': float(fg_iou),
+        'bg_iou': float(bg_iou),
+        'miou': float(miou),
+        'dice': float(fg_dice),
+        'fg_dice': float(fg_dice),
+        'bg_dice': float(bg_dice),
+        'mdice': float(mdice),
+        'precision': float(precision),
+        'recall': float(recall),
         'tp': int(tp),
         'fp': int(fp),
         'fn': int(fn),
@@ -274,7 +312,7 @@ def create_comparison_figure(stem, rgb_display, tensor, probs, pred_mask, gt_mas
         confusion_img[fn_b] = np.clip(confusion_img[fn_b] * 0.3 + np.array([0.0, 0.6, 1.0]) * 0.7, 0, 1)    # Cyan: False Negative (Miss)
 
         ax[4].imshow(confusion_img)
-        ax[4].set_title(f"Confusion: mIoU={metrics['iou']*100:.1f}%, Dice={metrics['dice']*100:.1f}%", fontsize=12, fontweight='bold')
+        ax[4].set_title(f"Confusion: Fg IoU={metrics['fg_iou']*100:.1f}%, mIoU={metrics['miou']*100:.1f}%, Fg Dice={metrics['fg_dice']*100:.1f}%", fontsize=11, fontweight='bold')
         ax[4].axis('off')
 
         # Add Legend
@@ -342,7 +380,7 @@ def run_predict(opt):
 
     # Load model and weights
     if opt.weights and Path(opt.weights).exists():
-        ckpt = torch.load(opt.weights, map_location=device)
+        ckpt = torch_load(opt.weights, map_location=device)
         model_cfg = ckpt.get('cfg', opt.cfg)
         fusion = ckpt.get('fusion', fusion)
         inputs = ckpt.get('inputs', resolve_inputs(opt.inputs, presets))
@@ -462,24 +500,31 @@ def run_predict(opt):
         # Save per-sample metrics CSV
         csv_path = save_dir / 'summary.csv'
         with open(csv_path, 'w') as f:
-            f.write("stem,iou,dice,precision,recall,tp,fp,fn,tn,gt_pixels,pred_pixels\n")
+            f.write("stem,fg_iou,bg_iou,miou,fg_dice,bg_dice,mdice,precision,recall,tp,fp,fn,tn,gt_pixels,pred_pixels\n")
             for m in all_sample_metrics:
-                f.write(f"{m['stem']},{m['iou']:.5f},{m['dice']:.5f},{m['precision']:.5f},{m['recall']:.5f},"
+                f.write(f"{m['stem']},{m['fg_iou']:.5f},{m['bg_iou']:.5f},{m['miou']:.5f},{m['fg_dice']:.5f},{m['bg_dice']:.5f},{m['mdice']:.5f},{m['precision']:.5f},{m['recall']:.5f},"
                         f"{m['tp']},{m['fp']},{m['fn']},{m['tn']},{m['gt_pixels']},{m['pred_pixels']}\n")
 
         # Compute dataset averages
-        mean_iou = np.mean([m['iou'] for m in all_sample_metrics])
-        mean_dice = np.mean([m['dice'] for m in all_sample_metrics])
+        mean_fg_iou = np.mean([m['fg_iou'] for m in all_sample_metrics])
+        mean_bg_iou = np.mean([m['bg_iou'] for m in all_sample_metrics])
+        mean_miou = np.mean([m['miou'] for m in all_sample_metrics])
+        mean_fg_dice = np.mean([m['fg_dice'] for m in all_sample_metrics])
+        mean_bg_dice = np.mean([m['bg_dice'] for m in all_sample_metrics])
+        mean_mdice = np.mean([m['mdice'] for m in all_sample_metrics])
         mean_prec = np.mean([m['precision'] for m in all_sample_metrics])
         mean_rec = np.mean([m['recall'] for m in all_sample_metrics])
 
         print("-" * 80)
         print(colorstr('bold', 'yellow', f"GROUND TRUTH EVALUATION SUMMARY ({len(all_sample_metrics)} Ground Truth Samples):"))
-        print(f"  Mean IoU       : {mean_iou * 100:.2f}%")
-        print(f"  Mean Dice (F1) : {mean_dice * 100:.2f}%")
-        print(f"  Mean Precision : {mean_prec * 100:.2f}%")
-        print(f"  Mean Recall    : {mean_rec * 100:.2f}%")
-        print(f"  Detailed CSV   : {csv_path}")
+        print(f"  Mean Foreground IoU (Landslide) : {mean_fg_iou * 100:6.2f}%")
+        print(f"  Mean Two-Class mIoU             : {mean_miou * 100:6.2f}%")
+        print(f"  Mean Background IoU             : {mean_bg_iou * 100:6.2f}%")
+        print(f"  Mean Foreground Dice (F1)       : {mean_fg_dice * 100:6.2f}%")
+        print(f"  Mean Two-Class mDice            : {mean_mdice * 100:6.2f}%")
+        print(f"  Mean Precision                  : {mean_prec * 100:6.2f}%")
+        print(f"  Mean Recall                     : {mean_rec * 100:6.2f}%")
+        print(f"  Detailed CSV                    : {csv_path}")
 
     print("=" * 80 + "\n")
 

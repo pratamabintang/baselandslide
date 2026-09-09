@@ -63,6 +63,16 @@ def model_info(model, verbose=False, img_size=(512, 512)):
 
 
 
+def torch_load(weights_path, map_location=None):
+    """
+    Robust torch.load wrapper supporting PyTorch 2.6+ while allowing full checkpoint dicts.
+    """
+    try:
+        return torch.load(weights_path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(weights_path, map_location=map_location)
+
+
 def load_pretrained_weights(model, weights_path, device='cpu'):
     """
     Load pretrained weights from a local file, URL, or official alias (e.g. 'unet_carvana').
@@ -99,7 +109,7 @@ def load_pretrained_weights(model, weights_path, device='cpu'):
         state_dict = torch.hub.load_state_dict_from_url(weights_path, map_location=device, progress=True)
         source_name = weights_path
     elif os.path.exists(weights_path):
-        ckpt = torch.load(weights_path, map_location=device)
+        ckpt = torch_load(weights_path, map_location=device)
         if isinstance(ckpt, dict):
             if 'model' in ckpt:
                 state_dict = ckpt['model']
@@ -188,3 +198,57 @@ class EarlyStopping:
         else:
             self.best_score = score
             self.counter = 0
+
+    def state_dict(self):
+        """Return early stopping state dictionary."""
+        return {
+            'counter': self.counter,
+            'best_score': self.best_score,
+            'early_stop': self.early_stop,
+            'patience': self.patience,
+            'delta': self.delta,
+            'mode': self.mode
+        }
+
+    def load_state_dict(self, state_dict):
+        """Restore early stopping state from dictionary."""
+        if not state_dict or not isinstance(state_dict, dict):
+            return
+        self.counter = state_dict.get('counter', 0)
+        self.best_score = state_dict.get('best_score', None)
+        self.early_stop = state_dict.get('early_stop', False)
+        self.patience = state_dict.get('patience', self.patience)
+        self.delta = state_dict.get('delta', self.delta)
+        self.mode = state_dict.get('mode', self.mode)
+
+
+def get_rng_states():
+    """Capture current random number generator states across Python, NumPy, CPU PyTorch, and CUDA PyTorch."""
+    states = {
+        'python': random.getstate(),
+        'numpy': np.random.get_state(),
+        'torch': torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        try:
+            states['cuda'] = torch.cuda.get_rng_state_all()
+        except Exception as e:
+            logger.warning(f"Could not capture CUDA RNG states: {e}")
+    return states
+
+
+def set_rng_states(states):
+    """Restore random number generator states across Python, NumPy, CPU PyTorch, and CUDA PyTorch."""
+    if not states or not isinstance(states, dict):
+        return
+    if 'python' in states and states['python'] is not None:
+        random.setstate(states['python'])
+    if 'numpy' in states and states['numpy'] is not None:
+        np.random.set_state(states['numpy'])
+    if 'torch' in states and states['torch'] is not None:
+        torch.set_rng_state(states['torch'])
+    if 'cuda' in states and states['cuda'] is not None and torch.cuda.is_available():
+        try:
+            torch.cuda.set_rng_state_all(states['cuda'])
+        except Exception as e:
+            logger.warning(f"Could not restore CUDA RNG states: {e}")

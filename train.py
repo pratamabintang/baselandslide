@@ -6,6 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 import yaml
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -17,7 +18,7 @@ from data.datasets import create_dataloader, resolve_inputs, get_channel_count
 from utils.loss import BCEDiceLoss
 from utils.metrics import SegmentationMetrics
 from utils.plots import plot_results, plot_predictions
-from utils.torch_utils import select_device, init_seeds, model_info, EarlyStopping, load_pretrained_weights
+from utils.torch_utils import select_device, init_seeds, model_info, EarlyStopping, load_pretrained_weights, get_rng_states, set_rng_states, torch_load
 from utils.general import increment_path, colorstr, check_file, set_logging, parse_options_with_config
 from test import evaluate
 
@@ -49,7 +50,7 @@ def train(hyp, opt, device):
         if not resume_path or not Path(resume_path).exists():
             raise FileNotFoundError(f"Cannot resume training: checkpoint not found at '{resume_path}'")
 
-        ckpt = torch.load(resume_path, map_location=device)
+        ckpt = torch_load(resume_path, map_location=device)
         save_dir = Path(resume_path).parent.parent
         weights_dir = save_dir / 'weights'
         last_pt = weights_dir / 'last.pt'
@@ -72,6 +73,9 @@ def train(hyp, opt, device):
         best_iou = ckpt.get('best_iou', ckpt.get('val_iou', 0.0))
         best_epoch = ckpt.get('best_epoch', ckpt.get('epoch', 0))
         best_scores = ckpt.get('best_scores', {})
+
+        if 'rng_state' in ckpt and ckpt['rng_state'] is not None:
+            set_rng_states(ckpt['rng_state'])
 
         print(colorstr('bold', 'yellow', f"\n[RESUME] Resuming training from {resume_path}"))
         print(f"  Resuming Epoch     : {start_epoch}/{opt.epochs}")
@@ -174,12 +178,24 @@ def train(hyp, opt, device):
     criterion = BCEDiceLoss(alpha=bce_w, beta=dice_w, pos_weight=pos_w).to(device)
     print(f"      -> Loss: {bce_w}*BCE + {dice_w}*Dice")
 
-    # Optimizer & LR Scheduler
+    # Optimizer with parameter groups & momentum
+    pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
+    for k, v in model.named_modules():
+        if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+            pg2.append(v.bias)  # biases (no decay)
+        if isinstance(v, (nn.BatchNorm2d, nn.GroupNorm)):
+            pg1.append(v.weight)  # batchnorm weights (no decay)
+        elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
+            pg0.append(v.weight)  # weights (apply weight decay)
+
     optimizer = optim.AdamW(
-        model.parameters(),
+        pg0,
         lr=hyp.get('lr0', 1e-3),
+        betas=(hyp.get('momentum', 0.937), 0.999),
         weight_decay=hyp.get('weight_decay', 1e-4)
     )
+    optimizer.add_param_group({'params': pg1, 'weight_decay': 0.0})
+    optimizer.add_param_group({'params': pg2, 'weight_decay': 0.0})
 
     scheduler = CosineAnnealingLR(
         optimizer,
@@ -187,32 +203,53 @@ def train(hyp, opt, device):
         eta_min=hyp.get('lr0', 1e-3) * hyp.get('lrf', 0.01)
     )
 
-    if resume and 'optimizer' in ckpt and ckpt['optimizer'] is not None:
-        optimizer.load_state_dict(ckpt['optimizer'])
-        # Fast-forward scheduler to the current epoch
-        for _ in range(start_epoch - 1):
-            scheduler.step()
-        print(f"      -> Restored optimizer state and learning rate: {optimizer.param_groups[0]['lr']:.2e}")
+    if resume:
+        if 'optimizer' in ckpt and ckpt['optimizer'] is not None:
+            optimizer.load_state_dict(ckpt['optimizer'])
+            print(f"      -> Restored optimizer state and learning rate: {optimizer.param_groups[0]['lr']:.2e}")
+        if 'scheduler' in ckpt and ckpt['scheduler'] is not None:
+            scheduler.load_state_dict(ckpt['scheduler'])
+            print("      -> Restored LR scheduler state (CosineAnnealingLR)")
+        else:
+            for _ in range(start_epoch - 1):
+                scheduler.step()
     else:
-        print(f"      -> Optimizer: AdamW (lr0={hyp.get('lr0', 1e-3)}, weight_decay={hyp.get('weight_decay', 1e-4)})")
+        print(f"      -> Optimizer: AdamW (lr0={hyp.get('lr0', 1e-3)}, momentum={hyp.get('momentum', 0.937)}, weight_decay={hyp.get('weight_decay', 1e-4)})")
 
     # Step 4: Mixed Precision
     print(colorstr('bold', '[4/5] Initializing compute hardware...'))
     cuda = device.type == 'cuda'
     scaler = torch.amp.GradScaler('cuda', enabled=cuda) if hasattr(torch, 'amp') else torch.cuda.amp.GradScaler(enabled=cuda)
+    if resume and 'scaler' in ckpt and ckpt['scaler'] is not None and cuda:
+        try:
+            scaler.load_state_dict(ckpt['scaler'])
+            print("      -> Restored AMP GradScaler dynamic scaling state")
+        except Exception as e:
+            logger.warning(f"Could not restore GradScaler state: {e}")
     print(f"      -> Device: {device} | CUDA Accelerated: {cuda} | AMP Mixed Precision: {cuda}")
 
     # Early stopping helper
     early_stopping = EarlyStopping(patience=opt.patience, verbose=False, mode='max')
+    if resume and 'early_stopping' in ckpt and ckpt['early_stopping'] is not None:
+        early_stopping.load_state_dict(ckpt['early_stopping'])
+        print(f"      -> Restored EarlyStopping state: counter={early_stopping.counter}/{early_stopping.patience}, best_score={early_stopping.best_score}")
 
     # Logging headers (create new or continue appending if resuming)
     if not resume or not results_csv.exists():
         with open(results_csv, 'w') as f:
-            f.write('epoch,train_loss,val_loss,val_iou,val_dice,val_precision,val_recall,val_accuracy\n')
+            f.write('epoch,train_loss,val_loss,val_fg_iou,val_miou,val_fg_dice,val_fg_dice_macro,val_precision,val_recall,val_accuracy\n')
+
+    # Warmup setup
+    warmup_epochs = hyp.get('warmup_epochs', 0.0)
+    nw = max(round(warmup_epochs * len(train_loader)), 10) if warmup_epochs > 0 else 0
+    w_mom0 = hyp.get('warmup_momentum', 0.8)
+    mom = hyp.get('momentum', 0.937)
+    w_bias_lr = hyp.get('warmup_bias_lr', 0.1)
+    base_lr = hyp.get('lr0', 1e-3)
 
     # Step 5: Training Loop
     print("\n" + colorstr('bold', '[5/5] Commencing training loop...\n'))
-    header_str = f"{'Epoch':>7} | {'Train Loss':>10} | {'Val Loss':>10} | {'mIoU':>8} | {'Dice (F1)':>9} | {'Prec':>8} | {'Recall':>8} | {'ETA':>8}"
+    header_str = f"{'Epoch':>7} | {'Train Loss':>10} | {'Val Loss':>10} | {'Fg IoU':>8} | {'mIoU':>8} | {'Fg Dice':>8} | {'Prec':>8} | {'Recall':>8} | {'ETA':>8}"
     print(header_str)
     print("-" * len(header_str))
 
@@ -224,7 +261,6 @@ def train(hyp, opt, device):
         train_dice = 0.0
         optimizer.zero_grad()
 
-        cur_lr = optimizer.param_groups[0]['lr']
         pbar = tqdm(
             train_loader,
             desc=f"[{epoch:03d}/{opt.epochs:03d}]",
@@ -234,20 +270,38 @@ def train(hyp, opt, device):
 
         accumulate = max(1, opt.accumulate)
         for batch_idx, (tensors, targets, stems) in enumerate(pbar):
+            ni = (epoch - 1) * len(train_loader) + batch_idx  # integrated batch index
+
+            # Linear warmup for LR and momentum
+            if ni <= nw and nw > 0:
+                xi = [0, nw]
+                for j, x in enumerate(optimizer.param_groups):
+                    if j == 2:  # bias group
+                        x['lr'] = float(np.interp(ni, xi, [w_bias_lr, base_lr]))
+                    else:
+                        x['lr'] = float(np.interp(ni, xi, [0.0, base_lr]))
+                    if 'betas' in x:
+                        x['betas'] = (float(np.interp(ni, xi, [w_mom0, mom])), 0.999)
+
+            cur_lr = optimizer.param_groups[0]['lr']
             tensors = tensors.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
+
+            # Determine actual sub-batch group size for unbiased normalization on trailing batches
+            remaining_in_epoch = len(train_loader) - (batch_idx // accumulate) * accumulate
+            group_size = min(accumulate, remaining_in_epoch)
 
             if cuda:
                 with torch.amp.autocast('cuda'):
                     logits = model(tensors)
                     loss, loss_dict = criterion(logits, targets)
-                    if accumulate > 1:
-                        loss = loss / accumulate
+                    if group_size > 1:
+                        loss = loss / group_size
             else:
                 logits = model(tensors)
                 loss, loss_dict = criterion(logits, targets)
-                if accumulate > 1:
-                    loss = loss / accumulate
+                if group_size > 1:
+                    loss = loss / group_size
 
             scaler.scale(loss).backward()
 
@@ -255,7 +309,6 @@ def train(hyp, opt, device):
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
-
 
             b_loss = loss_dict['loss'].item()
             b_bce = loss_dict['bce'].item()
@@ -289,15 +342,17 @@ def train(hyp, opt, device):
         )
 
         val_loss = val_scores['loss']
-        val_iou = val_scores['iou']
-        val_dice = val_scores['dice']
+        val_fg_iou = val_scores.get('fg_iou', val_scores.get('iou', 0.0))
+        val_miou = val_scores.get('miou', val_fg_iou)
+        val_fg_dice = val_scores.get('fg_dice', val_scores.get('dice', 0.0))
+        val_fg_dice_macro = val_scores.get('fg_dice_macro', val_fg_dice)
         val_prec = val_scores['precision']
         val_rec = val_scores['recall']
         val_acc = val_scores['accuracy']
 
         # Log results to CSV
         with open(results_csv, 'a') as f:
-            f.write(f"{epoch},{avg_train_loss:.5f},{val_loss:.5f},{val_iou:.5f},{val_dice:.5f},{val_prec:.5f},{val_rec:.5f},{val_acc:.5f}\n")
+            f.write(f"{epoch},{avg_train_loss:.5f},{val_loss:.5f},{val_fg_iou:.5f},{val_miou:.5f},{val_fg_dice:.5f},{val_fg_dice_macro:.5f},{val_prec:.5f},{val_rec:.5f},{val_acc:.5f}\n")
 
         # Calculate epoch duration and ETA
         epoch_time = time.time() - epoch_t0
@@ -305,71 +360,82 @@ def train(hyp, opt, device):
         eta_seconds = remaining_epochs * epoch_time
         eta_str = f"{int(eta_seconds // 60):02d}m{int(eta_seconds % 60):02d}s" if eta_seconds > 0 else "00m00s"
 
-        # Formatted row output
-        is_best = val_dice > best_dice
-        row_str = (
-            f"{epoch:3d}/{opt.epochs:3d} | "
-            f"{avg_train_loss:10.4f} | "
-            f"{val_loss:10.4f} | "
-            f"{val_iou*100:7.2f}% | "
-            f"{val_dice*100:8.2f}% | "
-            f"{val_prec*100:7.2f}% | "
-            f"{val_rec*100:7.2f}% | "
-            f"{eta_str:>8}"
-        )
-        if is_best:
-            best_dice = val_dice
-            best_iou = val_iou
-            best_epoch = epoch
-            best_scores = {
-                'epoch': epoch,
-                'train_loss': float(avg_train_loss),
-                'val_loss': float(val_loss),
-                'iou': float(val_iou),
-                'dice': float(val_dice),
-                'precision': float(val_prec),
-                'recall': float(val_rec),
-                'accuracy': float(val_acc)
-            }
-            row_str += colorstr('bright_green', ' (* Best)')
-            # Save best checkpoint
-            torch.save({
-                'epoch': epoch,
-                'best_epoch': best_epoch,
-                'best_scores': best_scores,
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'best_dice': best_dice,
-                'best_iou': best_iou,
-                'cfg': opt.cfg,
-                'inputs': inputs,
-                'fusion': opt.fusion,
-                'in_channels': in_channels,
-                'nc': nc
-            }, best_pt)
-
-        print(row_str)
-
-        # Save latest checkpoint
-        torch.save({
+        # Checkpoint payload
+        ckpt_payload = {
             'epoch': epoch,
             'best_epoch': best_epoch,
             'best_scores': best_scores,
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-            'val_dice': val_dice,
-            'val_iou': val_iou,
+            'scheduler': scheduler.state_dict(),
+            'scaler': scaler.state_dict() if cuda and hasattr(scaler, 'state_dict') else None,
+            'early_stopping': early_stopping.state_dict(),
+            'rng_state': get_rng_states(),
+            'val_dice': val_fg_dice,
+            'val_iou': val_fg_iou,
+            'val_miou': val_miou,
             'best_dice': best_dice,
             'best_iou': best_iou,
             'cfg': opt.cfg,
             'inputs': inputs,
             'fusion': opt.fusion,
             'in_channels': in_channels,
-            'nc': nc
-        }, last_pt)
+            'nc': nc,
+            'hyp': hyp,
+            'loss_cfg': {
+                'alpha': float(bce_w),
+                'beta': float(dice_w),
+                'pos_weight': float(pos_w),
+                'smooth': 1.0
+            }
+        }
+
+        # Formatted row output
+        is_best = val_fg_dice > best_dice
+        row_str = (
+            f"{epoch:3d}/{opt.epochs:3d} | "
+            f"{avg_train_loss:10.4f} | "
+            f"{val_loss:10.4f} | "
+            f"{val_fg_iou*100:7.2f}% | "
+            f"{val_miou*100:7.2f}% | "
+            f"{val_fg_dice*100:7.2f}% | "
+            f"{val_prec*100:7.2f}% | "
+            f"{val_rec*100:7.2f}% | "
+            f"{eta_str:>8}"
+        )
+        if is_best:
+            best_dice = val_fg_dice
+            best_iou = val_fg_iou
+            best_epoch = epoch
+            best_scores = {
+                'epoch': epoch,
+                'train_loss': float(avg_train_loss),
+                'val_loss': float(val_loss),
+                'fg_iou': float(val_fg_iou),
+                'bg_iou': float(val_scores.get('bg_iou', 0.0)),
+                'miou': float(val_miou),
+                'fg_dice': float(val_fg_dice),
+                'fg_dice_macro': float(val_fg_dice_macro),
+                'bg_dice': float(val_scores.get('bg_dice', 0.0)),
+                'mdice': float(val_scores.get('mdice', 0.0)),
+                'precision': float(val_prec),
+                'recall': float(val_rec),
+                'accuracy': float(val_acc)
+            }
+            ckpt_payload['best_epoch'] = best_epoch
+            ckpt_payload['best_scores'] = best_scores
+            ckpt_payload['best_dice'] = best_dice
+            ckpt_payload['best_iou'] = best_iou
+            row_str += colorstr('bright_green', ' (* Best)')
+            torch.save(ckpt_payload, best_pt)
+
+        print(row_str)
+
+        # Save latest checkpoint
+        torch.save(ckpt_payload, last_pt)
 
         # Early stopping check
-        early_stopping(val_dice)
+        early_stopping(val_fg_dice)
         if early_stopping.early_stop:
             print(colorstr('yellow', f"\n[INFO] Early stopping triggered at epoch {epoch} (no improvement for {opt.patience} epochs)."))
             break
@@ -384,14 +450,17 @@ def train(hyp, opt, device):
     print(f"  Total Epochs Trained: {total_epochs_trained}")
     print("-" * 78)
     print(colorstr('bold', 'bright_yellow', f"  ★ BEST VALIDATION METRICS (Achieved at Epoch {best_epoch}):"))
-    print(colorstr('bold', 'bright_green',  f"    • Best Validation Dice (F1) : {best_dice * 100:6.2f}%"))
-    print(colorstr('bold', 'bright_green',  f"    • Best Validation mIoU      : {best_iou * 100:6.2f}%"))
+    print(colorstr('bold', 'bright_green',  f"    • Foreground IoU (Landslide)  : {best_iou * 100:6.2f}% (Global Micro)"))
+    print(colorstr('bold', 'bright_green',  f"    • Two-Class Mean IoU (mIoU)   : {best_scores.get('miou', 0.0) * 100:6.2f}%"))
+    print(colorstr('bold', 'bright_green',  f"    • Foreground Dice (Micro F1)  : {best_dice * 100:6.2f}% (Global Micro)"))
+    print(colorstr('bold', 'bright_green',  f"    • Foreground Dice (Macro)     : {best_scores.get('fg_dice_macro', 0.0) * 100:6.2f}% (Per-Image Mean)"))
+    print(colorstr('bold', 'bright_green',  f"    • Two-Class Mean Dice (mDice) : {best_scores.get('mdice', 0.0) * 100:6.2f}%"))
     if best_scores:
-        print(f"    • Precision @ Best Epoch    : {best_scores.get('precision', 0.0) * 100:6.2f}%")
-        print(f"    • Recall @ Best Epoch       : {best_scores.get('recall', 0.0) * 100:6.2f}%")
-        print(f"    • Pixel Accuracy @ Best Ep  : {best_scores.get('accuracy', 0.0) * 100:6.2f}%")
-        print(f"    • Val Loss @ Best Epoch     : {best_scores.get('val_loss', 0.0):.4f}")
-        print(f"    • Train Loss @ Best Epoch   : {best_scores.get('train_loss', 0.0):.4f}")
+        print(f"    • Precision @ Best Epoch      : {best_scores.get('precision', 0.0) * 100:6.2f}%")
+        print(f"    • Recall @ Best Epoch         : {best_scores.get('recall', 0.0) * 100:6.2f}%")
+        print(f"    • Pixel Accuracy @ Best Epoch : {best_scores.get('accuracy', 0.0) * 100:6.2f}%")
+        print(f"    • Val Loss @ Best Epoch       : {best_scores.get('val_loss', 0.0):.4f}")
+        print(f"    • Train Loss @ Best Epoch     : {best_scores.get('train_loss', 0.0):.4f}")
     print("-" * 78)
     print(f"  Artifacts & Checkpoints:")
     print(f"    • Best Checkpoint   : {best_pt}")
@@ -407,8 +476,12 @@ def train(hyp, opt, device):
         with open(best_summary_file, 'w') as f:
             yaml.safe_dump({
                 'best_epoch': int(best_epoch),
-                'best_dice': float(best_dice),
-                'best_iou': float(best_iou),
+                'best_fg_iou': float(best_iou),
+                'best_miou': float(best_scores.get('miou', 0.0)),
+                'best_bg_iou': float(best_scores.get('bg_iou', 0.0)),
+                'best_fg_dice': float(best_dice),
+                'best_fg_dice_macro': float(best_scores.get('fg_dice_macro', 0.0)),
+                'best_mdice': float(best_scores.get('mdice', 0.0)),
                 'best_precision': float(best_scores.get('precision', 0.0)),
                 'best_recall': float(best_scores.get('recall', 0.0)),
                 'best_accuracy': float(best_scores.get('accuracy', 0.0)),
